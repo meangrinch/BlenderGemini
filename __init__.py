@@ -9,63 +9,93 @@ libs_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")
 if libs_path not in sys.path:
     sys.path.append(libs_path)
 
-import openai
-
 from .utilities import *
 bl_info = {
-    "name": "GPT-4 Blender Assistant",
+    "name": "Gemini Blender Assistant",
     "blender": (2, 82, 0),
     "category": "Object",
-    "author": "Aarya (@gd3kr)",
-    "version": (2, 0, 0),
-    "location": "3D View > UI > GPT-4 Blender Assistant",
-    "description": "Generate Blender Python code using OpenAI's GPT-4 to perform various tasks.",
-    "warning": "",
+    "author": "grinnch (@meangrinch)",
+    "version": (1, 0, 0),
+    "location": "3D View > UI > Gemini Blender Assistant",
+    "description": "Generate Blender Python code using Google's Gemini to perform various tasks.",
     "wiki_url": "",
     "tracker_url": "",
 }
 
-system_prompt = """You are an assistant made for the purposes of helping the user with Blender, the 3D software. 
-- Respond with your answers in markdown (```). 
-- Preferably import entire modules instead of bits. 
-- Do not perform destructive operations on the meshes. 
-- Do not use cap_ends. Do not do more than what is asked (setting up render settings, adding cameras, etc)
+system_prompt = """You are a Blender Python code assistant. Generate concise Python code snippets for Blender, the 3D software.
+- Respond with your answers in markdown (```).
+- When modifying objects:
+  * Change existing objects when possible
+  * Delete and recreate objects if modification isn't feasible
+- When creating objects, consider and implement where appropriate:
+  * Materials: Use nodes. Set properties (color, metallic, roughness, etc.)
+  * Textures/UVs: Apply textures, set up UV mapping
+  * Transforms: Set location, rotation, scale
+  * Modifiers: Use for non-destructive effects
+  * Custom Properties: Add when needed
+  * Parenting: Establish parent-child relationships
+- When creating materials, use nodes for better control and flexibility.
+- Do not perform destructive operations on the meshes.
+- Do not invent non-existent parameters like 'segments', 'cap_ends', or 'specular'.
+- Do not do more than what is asked (setting up render settings, adding cameras, etc).
 - Do not respond with anything that is not Python code.
 
 Example:
 
-user: create 10 cubes in random locations from -10 to 10
+user: create a red metallic cube at position (0,0,0)
 assistant:
 ```
 import bpy
-import random
-bpy.ops.mesh.primitive_cube_add()
 
-#how many cubes you want to add
-count = 10
+# Create a new cube
+bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0))
 
-for c in range(0,count):
-    x = random.randint(-10,10)
-    y = random.randint(-10,10)
-    z = random.randint(-10,10)
-    bpy.ops.mesh.primitive_cube_add(location=(x,y,z))
+# Get the reference to the created cube
+cube = bpy.context.object
+
+# Create a new material
+material = bpy.data.materials.new(name="RedMetallicMaterial")
+material.use_nodes = True
+nodes = material.node_tree.nodes
+
+# Clear default nodes
+for node in nodes:
+    nodes.remove(node)
+
+# Create Principled BSDF node
+bsdf = nodes.new(type='ShaderNodeBsdfPrincipled')
+bsdf.location = (0, 0)
+bsdf.inputs['Base Color'].default_value = (1, 0, 0, 1)  # Red color
+bsdf.inputs['Metallic'].default_value = 1  # Metallic
+bsdf.inputs['Roughness'].default_value = 0.25  # Slightly shiny
+
+# Create Material Output node
+material_output = nodes.new(type='ShaderNodeOutputMaterial')
+material_output.location = (200, 0)
+
+# Link nodes
+material.node_tree.links.new(bsdf.outputs['BSDF'], material_output.inputs['Surface'])
+
+# Assign material to the cube
+if cube.data.materials:
+    cube.data.materials[0] = material
+else:
+    cube.data.materials.append(material)
 ```"""
 
-
-
-class GPT4_OT_DeleteMessage(bpy.types.Operator):
-    bl_idname = "gpt4.delete_message"
+class GEMINI_OT_DeleteMessage(bpy.types.Operator):
+    bl_idname = "gemini.delete_message"
     bl_label = "Delete Message"
     bl_options = {'REGISTER', 'UNDO'}
 
     message_index: bpy.props.IntProperty()
 
     def execute(self, context):
-        context.scene.gpt4_chat_history.remove(self.message_index)
+        context.scene.gemini_chat_history.remove(self.message_index)
         return {'FINISHED'}
 
-class GPT4_OT_ShowCode(bpy.types.Operator):
-    bl_idname = "gpt4.show_code"
+class GEMINI_OT_ShowCode(bpy.types.Operator):
+    bl_idname = "gemini.show_code"
     bl_label = "Show Code"
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -76,7 +106,7 @@ class GPT4_OT_ShowCode(bpy.types.Operator):
     )
 
     def execute(self, context):
-        text_name = "GPT4_Generated_Code.py"
+        text_name = "Gemini_Generated_Code.py"
         text = bpy.data.texts.get(text_name)
         if text is None:
             text = bpy.data.texts.new(text_name)
@@ -97,12 +127,12 @@ class GPT4_OT_ShowCode(bpy.types.Operator):
 
         return {'FINISHED'}
 
-class GPT4_PT_Panel(bpy.types.Panel):
-    bl_label = "GPT-4 Blender Assistant"
-    bl_idname = "GPT4_PT_Panel"
+class GEMINI_PT_Panel(bpy.types.Panel):
+    bl_label = "Gemini Blender Assistant"
+    bl_idname = "GEMINI_PT_Panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = 'GPT-4 Assistant'
+    bl_category = 'Gemini Assistant'
 
     def draw(self, context):
         layout = self.layout
@@ -110,45 +140,45 @@ class GPT4_PT_Panel(bpy.types.Panel):
 
         column.label(text="Chat history:")
         box = column.box()
-        for index, message in enumerate(context.scene.gpt4_chat_history):
+        for index, message in enumerate(context.scene.gemini_chat_history):
             if message.type == 'assistant':
                 row = box.row()
                 row.label(text="Assistant: ")
-                show_code_op = row.operator("gpt4.show_code", text="Show Code")
+                show_code_op = row.operator("gemini.show_code", text="Show Code")
                 show_code_op.code = message.content
-                delete_message_op = row.operator("gpt4.delete_message", text="", icon="TRASH", emboss=False)
+                delete_message_op = row.operator("gemini.delete_message", text="", icon="TRASH", emboss=False)
                 delete_message_op.message_index = index
             else:
                 row = box.row()
                 row.label(text=f"User: {message.content}")
-                delete_message_op = row.operator("gpt4.delete_message", text="", icon="TRASH", emboss=False)
+                delete_message_op = row.operator("gemini.delete_message", text="", icon="TRASH", emboss=False)
                 delete_message_op.message_index = index
 
         column.separator()
         
-        column.label(text="GPT Model:")
-        column.prop(context.scene, "gpt4_model", text="")
+        column.label(text="Gemini Model:")
+        column.prop(context.scene, "gemini_model", text="")
 
         column.label(text="Enter your message:")
-        column.prop(context.scene, "gpt4_chat_input", text="")
-        button_label = "Please wait...(this might take some time)" if context.scene.gpt4_button_pressed else "Execute"
+        column.prop(context.scene, "gemini_chat_input", text="")
+        button_label = "Please wait...(this might take some time)" if context.scene.gemini_button_pressed else "Execute"
         row = column.row(align=True)
-        row.operator("gpt4.send_message", text=button_label)
-        row.operator("gpt4.clear_chat", text="Clear Chat")
+        row.operator("gemini.send_message", text=button_label)
+        row.operator("gemini.clear_chat", text="Clear Chat")
 
         column.separator()
 
-class GPT4_OT_ClearChat(bpy.types.Operator):
-    bl_idname = "gpt4.clear_chat"
+class GEMINI_OT_ClearChat(bpy.types.Operator):
+    bl_idname = "gemini.clear_chat"
     bl_label = "Clear Chat"
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        context.scene.gpt4_chat_history.clear()
+        context.scene.gemini_chat_history.clear()
         return {'FINISHED'}
 
-class GPT4_OT_Execute(bpy.types.Operator):
-    bl_idname = "gpt4.send_message"
+class GEMINI_OT_Execute(bpy.types.Operator):
+    bl_idname = "gemini.send_message"
     bl_label = "Send Message"
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -159,57 +189,57 @@ class GPT4_OT_Execute(bpy.types.Operator):
     )
 
     def execute(self, context):
-        openai.api_key = get_api_key(context, __name__)
-        # if null then set to env key
-        if not openai.api_key:
-            openai.api_key = os.getenv("OPENAI_API_KEY")
+        api_key = get_api_key(context, __name__)
+        if not api_key:
+            api_key = os.getenv("GEMINI_API_KEY")
 
-        if not openai.api_key:
-            self.report({'ERROR'}, "No API key detected. Please set the API key in the addon preferences.")
+        if not api_key:
+            self.report({'ERROR'}, "No API key detected. Please set your Gemini API key in the addon preferences.")
             return {'CANCELLED'}
 
-        context.scene.gpt4_button_pressed = True
+        context.scene.gemini_button_pressed = True
         bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
         
-        blender_code = generate_blender_code(context.scene.gpt4_chat_input, context.scene.gpt4_chat_history, context, system_prompt)
+        blender_code = generate_blender_code(context.scene.gemini_chat_input, context.scene.gemini_chat_history, context, system_prompt)
 
-        message = context.scene.gpt4_chat_history.add()
+        message = context.scene.gemini_chat_history.add()
         message.type = 'user'
-        message.content = context.scene.gpt4_chat_input
+        message.content = context.scene.gemini_chat_input
 
-        # Clear the chat input field
-        context.scene.gpt4_chat_input = ""
-
+        context.scene.gemini_chat_input = ""
     
         if blender_code:
-            message = context.scene.gpt4_chat_history.add()
+            message = context.scene.gemini_chat_history.add()
             message.type = 'assistant'
             message.content = blender_code
 
-            global_namespace = globals().copy()
-    
-        try:
-            exec(blender_code, global_namespace)
-        except Exception as e:
-            self.report({'ERROR'}, f"Error executing generated code: {e}")
-            context.scene.gpt4_button_pressed = False
-            return {'CANCELLED'}
+            # Create a new namespace dictionary with globals
+            namespace = {
+                'bpy': bpy,
+                'context': context,
+                '__name__': '__main__'
+            }
+            
+            try:
+                exec(blender_code, namespace)
+            except Exception as e:
+                self.report({'ERROR'}, f"Error executing generated code: {e}")
+                context.scene.gemini_button_pressed = False
+                return {'CANCELLED'}
 
-        
-
-        context.scene.gpt4_button_pressed = False
+        context.scene.gemini_button_pressed = False
         return {'FINISHED'}
 
 
 def menu_func(self, context):
-    self.layout.operator(GPT4_OT_Execute.bl_idname)
+    self.layout.operator(GEMINI_OT_Execute.bl_idname)
 
-class GPT4AddonPreferences(bpy.types.AddonPreferences):
+class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
 
     api_key: bpy.props.StringProperty(
         name="API Key",
-        description="Enter your OpenAI API Key",
+        description="Enter your Google Gemini API Key",
         default="",
         subtype="PASSWORD",
     )
@@ -219,12 +249,12 @@ class GPT4AddonPreferences(bpy.types.AddonPreferences):
         layout.prop(self, "api_key")
 
 def register():
-    bpy.utils.register_class(GPT4AddonPreferences)
-    bpy.utils.register_class(GPT4_OT_Execute)
-    bpy.utils.register_class(GPT4_PT_Panel)
-    bpy.utils.register_class(GPT4_OT_ClearChat)
-    bpy.utils.register_class(GPT4_OT_ShowCode)
-    bpy.utils.register_class(GPT4_OT_DeleteMessage)
+    bpy.utils.register_class(GEMINI_AddonPreferences)
+    bpy.utils.register_class(GEMINI_OT_DeleteMessage)
+    bpy.utils.register_class(GEMINI_OT_Execute)
+    bpy.utils.register_class(GEMINI_PT_Panel)
+    bpy.utils.register_class(GEMINI_OT_ClearChat)
+    bpy.utils.register_class(GEMINI_OT_ShowCode)
 
 
     bpy.types.VIEW3D_MT_mesh_add.append(menu_func)
@@ -232,12 +262,12 @@ def register():
 
 
 def unregister():
-    bpy.utils.unregister_class(GPT4AddonPreferences)
-    bpy.utils.unregister_class(GPT4_OT_Execute)
-    bpy.utils.unregister_class(GPT4_PT_Panel)
-    bpy.utils.unregister_class(GPT4_OT_ClearChat)
-    bpy.utils.unregister_class(GPT4_OT_ShowCode)
-    bpy.utils.unegister_class(GPT4_OT_DeleteMessage)
+    bpy.utils.unregister_class(GEMINI_AddonPreferences)
+    bpy.utils.unregister_class(GEMINI_OT_DeleteMessage)
+    bpy.utils.unregister_class(GEMINI_OT_Execute)
+    bpy.utils.unregister_class(GEMINI_PT_Panel)
+    bpy.utils.unregister_class(GEMINI_OT_ClearChat)
+    bpy.utils.unregister_class(GEMINI_OT_ShowCode)
 
     bpy.types.VIEW3D_MT_mesh_add.remove(menu_func)
     clear_props()
