@@ -19,7 +19,6 @@ def init_props():
         description="Select the Gemini model to use",
         items=[
             ("gemini-2.0-flash-exp", "Gemini 2.0 Flash Experimental", "Use Gemini 2.0 Flash"),
-            ("gemini-2.0-flash-thinking-exp-1219", "Gemini 2.0 Flash Thinking", "Use Gemini 2.0 Flash Thinking"),
             ("gemini-exp-1206", "Gemini Experimental 1206", "Use Gemini Experimental 1206"),
         ],
         default="gemini-2.0-flash-exp",
