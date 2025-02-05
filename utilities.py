@@ -18,10 +18,11 @@ def init_props():
         name="Gemini Model",
         description="Select the Gemini model to use",
         items=[
-            ("gemini-2.0-flash-exp", "Gemini 2.0 Flash Experimental", "Use Gemini 2.0 Flash"),
-            ("gemini-exp-1206", "Gemini Experimental 1206", "Use Gemini Experimental 1206"),
+            ("gemini-2.0-flash", "Gemini 2.0 Flash", "Use Gemini 2.0 Flash"),
+            ("gemini-2.0-pro-exp-02-05", "Gemini 2.0 Pro Exp 02-05", "Use Gemini 2.0 Pro Exp"),
+            ("gemini-2.0-flash-thinking-exp-01-21", "Gemini 2.0 Flash Thinking Exp 01-21", "Use Gemini 2.0 Flash Thinking Exp"),
         ],
-        default="gemini-2.0-flash-exp",
+        default="gemini-2.0-flash",
     )
     bpy.types.Scene.gemini_chat_input = bpy.props.StringProperty(
         name="Message",
@@ -69,6 +70,10 @@ def generate_blender_code(prompt, chat_history, context, system_prompt):
         response = requests.post(url, headers=headers, json=data)
         response.raise_for_status()
         response_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+        if context.scene.gemini_model == "gemini-2.0-flash-thinking-exp-01-21":
+            # Remove the internal thought process text if present (e.g., any content following a "THOUGHT:" marker)
+            response_text = re.sub(r'THOUGHT:\s*.*?```', '```', response_text, flags=re.DOTALL)
         
         # Extract code between ```python and ``` markers
         code_match = re.search(r'```(?:python)?(.*?)```', response_text, re.DOTALL)
