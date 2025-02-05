@@ -24,5 +24,6 @@ Blender can be controlled using program scripts written in Python. This plugin p
 
 ## Models Available
 
-- Gemini 2.0 Flash Experimental
-- Gemini Experimental 1206
+- Gemini 2.0 Flash
+- Gemini 2.0 Pro Experimental 02-05
+- Gemini 2.0 Flash Thinking Experimental 01-21
