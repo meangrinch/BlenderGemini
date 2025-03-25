@@ -3,7 +3,6 @@ import os
 import bpy
 import bpy.props
 
-# Add the 'libs' folder to the Python path
 libs_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")
 if libs_path not in sys.path:
     sys.path.append(libs_path)
@@ -235,7 +234,6 @@ class GEMINI_OT_Execute(bpy.types.Operator):
             self.report({'ERROR'}, "No API key detected. Please set your Gemini API key in the addon preferences.")
             return {'CANCELLED'}
 
-        # Get max fix attempts from preferences
         preferences = context.preferences
         addon_prefs = preferences.addons[__name__].preferences
         max_fix_attempts = addon_prefs.max_fix_attempts
@@ -252,24 +250,20 @@ class GEMINI_OT_Execute(bpy.types.Operator):
         context.scene.gemini_chat_input = ""
     
         if blender_code:
-            # Track objects before code execution to identify new objects later if needed
             objects_before = set(bpy.data.objects)
             materials_before = set(bpy.data.materials)
             
-            # Add code to history
             history_index = len(context.scene.gemini_chat_history)
             message = context.scene.gemini_chat_history.add()
             message.type = 'assistant'
             message.content = blender_code
 
-            # Create a new namespace dictionary with globals
             namespace = {
                 'bpy': bpy,
                 'context': context,
                 '__name__': '__main__'
             }
             
-            # First execution attempt with original code
             try:
                 exec(blender_code, namespace)
             except Exception as e:
@@ -281,28 +275,21 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                 error_message = f"Error executing generated code: {str(e)}"
                 self.report({'WARNING'}, f"Original code had an error. Attempting to fix (1/{max_fix_attempts})...")
                 
-                # Remove the erroneous code from history
                 context.scene.gemini_chat_history.remove(history_index)
                 
-                # Remove any objects created by the erroneous code
                 objects_after = set(bpy.data.objects)
                 materials_after = set(bpy.data.materials)
                 
-                # Find and remove new objects
                 for obj in objects_after - objects_before:
                     bpy.data.objects.remove(obj, do_unlink=True)
                 
-                # Find and remove new materials
                 for mat in materials_after - materials_before:
                     bpy.data.materials.remove(mat)
                 
-                # Variable to track current code and previous objects/materials
                 current_code = blender_code
                 current_error = error_message
                 
-                # Loop through fix attempts
                 for attempt in range(1, max_fix_attempts + 1):
-                    # Try to fix the code
                     fixed_code = fix_blender_code(current_code, current_error, context, system_prompt)
                     
                     if not fixed_code:
@@ -310,44 +297,34 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                         context.scene.gemini_button_pressed = False
                         return {'CANCELLED'}
                     
-                    # Add the fixed code to chat history
                     fix_history_index = len(context.scene.gemini_chat_history)
                     message = context.scene.gemini_chat_history.add()
                     message.type = 'assistant'
                     message.content = fixed_code
                     
-                    # Try to execute the fixed code
                     try:
                         exec(fixed_code, namespace)
                         self.report({'INFO'}, f"Code fixed and executed successfully on attempt {attempt}!")
-                        break  # Success! Exit the loop
+                        break
                     except Exception as e2:
-                        # Fix failed
                         current_error = f"Error executing fixed code: {str(e2)}"
                         
-                        # If this isn't the last attempt, prepare for another fix
                         if attempt < max_fix_attempts:
                             self.report({'WARNING'}, f"Fix attempt {attempt} had an error. Attempting to fix again ({attempt+1}/{max_fix_attempts})...")
                             
-                            # Remove the failed fixed code from history
                             context.scene.gemini_chat_history.remove(fix_history_index)
                             
-                            # Track and remove objects created by this fix attempt
                             objects_after_fix = set(bpy.data.objects)
                             materials_after_fix = set(bpy.data.materials)
                             
-                            # Find and remove new objects from fix attempt
                             for obj in objects_after_fix - objects_before:
                                 bpy.data.objects.remove(obj, do_unlink=True)
                             
-                            # Find and remove new materials from fix attempt
                             for mat in materials_after_fix - materials_before:
                                 bpy.data.materials.remove(mat)
                             
-                            # Update current code for next attempt
                             current_code = fixed_code
                         else:
-                            # Last attempt failed
                             self.report({'ERROR'}, f"Error executing code after {max_fix_attempts} fix attempts: {e2}")
                             context.scene.gemini_button_pressed = False
                             return {'CANCELLED'}

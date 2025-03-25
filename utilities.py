@@ -2,7 +2,6 @@ import bpy
 import requests
 import re
 
-
 def get_api_key(context, addon_name):
     preferences = context.preferences
     addon_prefs = preferences.addons[addon_name].preferences
@@ -39,7 +38,6 @@ def clear_props():
 def generate_blender_code(prompt, chat_history, context, system_prompt):
     api_key = get_api_key(context, "BlenderGemini")
     
-    # Get preferences for generation parameters
     preferences = context.preferences
     addon_prefs = preferences.addons["BlenderGemini"].preferences
     
@@ -86,7 +84,6 @@ def fix_blender_code(original_code, error_message, context, system_prompt):
     """Generate fixed Blender code based on the error message."""
     api_key = get_api_key(context, "BlenderGemini")
     
-    # Get preferences for generation parameters
     preferences = context.preferences
     addon_prefs = preferences.addons["BlenderGemini"].preferences
     
