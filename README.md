@@ -17,6 +17,8 @@ Blender can be controlled using program scripts written in Python. This plugin p
 2. Type a natural language command in the input field, e.g., "create a cube at the origin"
 3. Click the `Execute` button to generate and execute the Blender Python code
 
+Note: If the generated code produced an error, Gemini will automatically attempt to fix it (up to 1 time by default).
+
 ## Requirements
 
 - Blender 3.1 or later
@@ -25,5 +27,6 @@ Blender can be controlled using program scripts written in Python. This plugin p
 ## Models Available
 
 - Gemini 2.0 Flash
-- Gemini 2.0 Pro Experimental 02-05
+- Gemini 2.0 Flash Lite
 - Gemini 2.0 Flash Thinking Experimental 01-21
+- Gemini 2.5 Pro Experimental 03-25
