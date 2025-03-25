@@ -1,9 +1,6 @@
 import bpy
 import requests
 import re
-import os
-import sys
-import json
 
 
 def get_api_key(context, addon_name):
@@ -19,8 +16,9 @@ def init_props():
         description="Select the Gemini model to use",
         items=[
             ("gemini-2.0-flash", "Gemini 2.0 Flash", "Use Gemini 2.0 Flash"),
-            ("gemini-2.0-pro-exp-02-05", "Gemini 2.0 Pro Exp 02-05", "Use Gemini 2.0 Pro Exp"),
+            ("gemini-2.0-flash-lite", "Gemini 2.0 Flash Lite", "Use Gemini 2.0 Flash Lite"),
             ("gemini-2.0-flash-thinking-exp-01-21", "Gemini 2.0 Flash Thinking Exp 01-21", "Use Gemini 2.0 Flash Thinking Exp"),
+            ("gemini-2.5-pro-exp-03-25", "Gemini 2.5 Pro Exp 03-25", "Use Gemini 2.5 Pro Exp"),
         ],
         default="gemini-2.0-flash",
     )
@@ -41,6 +39,10 @@ def clear_props():
 def generate_blender_code(prompt, chat_history, context, system_prompt):
     api_key = get_api_key(context, "BlenderGemini")
     
+    # Get preferences for generation parameters
+    preferences = context.preferences
+    addon_prefs = preferences.addons["BlenderGemini"].preferences
+    
     url = "https://generativelanguage.googleapis.com/v1beta/models/" + context.scene.gemini_model + ":generateContent"
     headers = {
         "Content-Type": "application/json",
@@ -59,9 +61,9 @@ def generate_blender_code(prompt, chat_history, context, system_prompt):
     data = {
         "contents": [{"parts": messages}],
         "generationConfig": {
-            "temperature": 1.0,
-            "topP": 0.95,
-            "topK": 40,
+            "temperature": addon_prefs.temperature,
+            "topP": addon_prefs.top_p,
+            "topK": addon_prefs.top_k,
             "maxOutputTokens": 8192,
         }
     }
@@ -70,10 +72,6 @@ def generate_blender_code(prompt, chat_history, context, system_prompt):
         response = requests.post(url, headers=headers, json=data)
         response.raise_for_status()
         response_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
-
-        if context.scene.gemini_model == "gemini-2.0-flash-thinking-exp-01-21":
-            # Remove the internal thought process text if present (e.g., any content following a "THOUGHT:" marker)
-            response_text = re.sub(r'THOUGHT:\s*.*?```', '```', response_text, flags=re.DOTALL)
         
         # Extract code between ```python and ``` markers
         code_match = re.search(r'```(?:python)?(.*?)```', response_text, re.DOTALL)
@@ -82,6 +80,63 @@ def generate_blender_code(prompt, chat_history, context, system_prompt):
         return response_text.strip()
     except Exception as e:
         print(f"Error: {str(e)}")
+        return None
+
+def fix_blender_code(original_code, error_message, context, system_prompt):
+    """Generate fixed Blender code based on the error message."""
+    api_key = get_api_key(context, "BlenderGemini")
+    
+    # Get preferences for generation parameters
+    preferences = context.preferences
+    addon_prefs = preferences.addons["BlenderGemini"].preferences
+    
+    url = "https://generativelanguage.googleapis.com/v1beta/models/" + context.scene.gemini_model + ":generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key
+    }
+
+    fix_prompt = f"""You previously generated this Blender Python code:
+
+```
+{original_code}
+```
+
+But it produced this error:
+
+```
+{error_message}
+```
+
+Please fix the code to resolve this error. Only provide the corrected code without any explanation or additional text. The fixed code should accomplish the same task as the original code but without errors."""
+
+    data = {
+        "contents": [{
+            "parts": [
+                {"text": system_prompt},
+                {"text": fix_prompt}
+            ]
+        }],
+        "generationConfig": {
+            "temperature": addon_prefs.temperature,
+            "topP": addon_prefs.top_p,
+            "topK": addon_prefs.top_k,
+            "maxOutputTokens": 8192,
+        }
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        response_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+        
+        # Extract code between ```python and ``` markers
+        code_match = re.search(r'```(?:python)?(.*?)```', response_text, re.DOTALL)
+        if code_match:
+            return code_match.group(1).strip()
+        return response_text.strip()
+    except Exception as e:
+        print(f"Error when trying to fix code: {str(e)}")
         return None
 
 def split_area_to_text_editor(context):

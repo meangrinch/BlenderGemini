@@ -2,7 +2,6 @@ import sys
 import os
 import bpy
 import bpy.props
-import re
 
 # Add the 'libs' folder to the Python path
 libs_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")
@@ -15,72 +14,111 @@ bl_info = {
     "blender": (2, 82, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 1, 0),
+    "version": (1, 2, 1),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini to perform various tasks.",
     "wiki_url": "",
     "tracker_url": "",
 }
 
-system_prompt = """You are a Blender Python code assistant. Generate concise Python code snippets for Blender, the 3D software.
-- Respond with your answers in markdown (```).
-- When modifying objects:
-  * Change existing objects when possible
-  * Delete and recreate objects if modification isn't feasible
-- When creating objects, consider and implement where appropriate:
-  * Materials: Use nodes. Set properties (color, metallic, roughness, etc.)
-  * Textures/UVs: Apply textures, set up UV mapping
-  * Transforms: Set location, rotation, scale
-  * Modifiers: Use for non-destructive effects
-  * Custom Properties: Add when needed
-  * Parenting: Establish parent-child relationships
-- When creating materials, use nodes for better control and flexibility.
-- Do not perform destructive operations on the meshes.
-- Do not invent non-existent parameters like 'segments', 'cap_ends', or 'specular'.
-- Do not do more than what is asked (setting up render settings, adding cameras, etc).
-- Do not respond with anything that is not Python code.
+system_prompt = """You are a Blender Python code assistant:
+
+1. Respond with your answers in markdown (```).
+
+2. When modifying objects:
+  - Change existing objects when possible
+  - Delete and recreate objects if modification isn't feasible
+  
+3. When creating objects, consider and implement where appropriate:
+  - Materials: Use nodes. Set properties (color, metallic, roughness, etc.)
+  - Textures/UVs: Apply textures, set up UV mapping
+  - Transforms: Set location, rotation, scale
+  - Modifiers: Use for non-destructive effects
+  - Custom Properties: Add when needed
+  - Parenting: Establish parent-child relationships
+  
+4. Do not perform destructive operations on the meshes.
+
+5. Do not invent non-existent parameters like 'segments', 'cap_ends', or 'specular'.
+
+6. Do not do more than what is asked (setting up render settings, adding cameras, etc.,).
+
+7. Do not respond with anything that is not Python code.
 
 Example:
 
-user: create a red metallic cube at position (0,0,0)
+user: Create a sphere and make it metallic red. Add a cube, make it smaller, color it green, position it 2 units above the sphere, and parent the cube to the sphere.
 assistant:
 ```
 import bpy
 
-# Create a new cube
-bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0))
+# --- Create Sphere ---
+bpy.ops.mesh.primitive_uv_sphere_add(location=(0, 0, 0))
+sphere_obj = bpy.context.object
+sphere_obj.name = "MetallicRedSphere"
 
-# Get the reference to the created cube
-cube = bpy.context.object
+# --- Create Sphere Material ---
+mat_sphere = bpy.data.materials.new(name="RedMetallic")
+mat_sphere.use_nodes = True
+principled_bsdf_sphere = mat_sphere.node_tree.nodes.get("Principled BSDF")
+if principled_bsdf_sphere:
+    # Set Color to Red
+    principled_bsdf_sphere.inputs["Base Color"].default_value = (1.0, 0.0, 0.0, 1.0)
+    # Set Metallic
+    principled_bsdf_sphere.inputs["Metallic"].default_value = 1.0
+    # Set Roughness (lower for more shine)
+    principled_bsdf_sphere.inputs["Roughness"].default_value = 0.2
 
-# Create a new material
-material = bpy.data.materials.new(name="RedMetallicMaterial")
-material.use_nodes = True
-nodes = material.node_tree.nodes
-
-# Clear default nodes
-for node in nodes:
-    nodes.remove(node)
-
-# Create Principled BSDF node
-bsdf = nodes.new(type='ShaderNodeBsdfPrincipled')
-bsdf.location = (0, 0)
-bsdf.inputs['Base Color'].default_value = (1, 0, 0, 1)  # Red color
-bsdf.inputs['Metallic'].default_value = 1  # Metallic
-bsdf.inputs['Roughness'].default_value = 0.25  # Slightly shiny
-
-# Create Material Output node
-material_output = nodes.new(type='ShaderNodeOutputMaterial')
-material_output.location = (200, 0)
-
-# Link nodes
-material.node_tree.links.new(bsdf.outputs['BSDF'], material_output.inputs['Surface'])
-
-# Assign material to the cube
-if cube.data.materials:
-    cube.data.materials[0] = material
+# Assign material to sphere
+if sphere_obj.data.materials:
+    sphere_obj.data.materials[0] = mat_sphere
 else:
-    cube.data.materials.append(material)
+    sphere_obj.data.materials.append(mat_sphere)
+
+# --- Create Cube ---
+# Ensure sphere is deselected if needed, though add usually handles this
+bpy.ops.object.select_all(action='DESELECT')
+bpy.ops.mesh.primitive_cube_add(location=(0, 0, 2.0)) # Position above sphere
+cube_obj = bpy.context.object
+cube_obj.name = "GreenChildCube"
+
+# --- Set Cube Transforms ---
+# Scale it down
+cube_obj.scale = (0.5, 0.5, 0.5)
+# Location was set during creation, but can be confirmed/set again:
+# cube_obj.location = (0, 0, 2.0)
+
+# --- Create Cube Material ---
+mat_cube = bpy.data.materials.new(name="GreenDiffuse")
+mat_cube.use_nodes = True
+principled_bsdf_cube = mat_cube.node_tree.nodes.get("Principled BSDF")
+if principled_bsdf_cube:
+    # Set Color to Green
+    principled_bsdf_cube.inputs["Base Color"].default_value = (0.0, 1.0, 0.0, 1.0)
+    # Ensure it's not metallic (default is 0, but explicit is fine)
+    principled_bsdf_cube.inputs["Metallic"].default_value = 0.0
+    # Default roughness is fine
+    principled_bsdf_cube.inputs["Roughness"].default_value = 0.5
+
+# Assign material to cube
+if cube_obj.data.materials:
+    cube_obj.data.materials[0] = mat_cube
+else:
+    cube_obj.data.materials.append(mat_cube)
+
+# --- Parent Cube to Sphere ---
+# Ensure objects exist
+if cube_obj and sphere_obj:
+    # Select the child (cube), then the parent (sphere)
+    bpy.ops.object.select_all(action='DESELECT')
+    cube_obj.select_set(True)
+    sphere_obj.select_set(True)
+    bpy.context.view_layer.objects.active = sphere_obj # Set parent as active
+    # Perform parenting
+    bpy.ops.object.parent_set(type='OBJECT', keep_transform=True)
+
+# Deselect all after operation
+bpy.ops.object.select_all(action='DESELECT')
 ```"""
 
 class GEMINI_OT_DeleteMessage(bpy.types.Operator):
@@ -197,6 +235,11 @@ class GEMINI_OT_Execute(bpy.types.Operator):
             self.report({'ERROR'}, "No API key detected. Please set your Gemini API key in the addon preferences.")
             return {'CANCELLED'}
 
+        # Get max fix attempts from preferences
+        preferences = context.preferences
+        addon_prefs = preferences.addons[__name__].preferences
+        max_fix_attempts = addon_prefs.max_fix_attempts
+
         context.scene.gemini_button_pressed = True
         bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
         
@@ -209,6 +252,12 @@ class GEMINI_OT_Execute(bpy.types.Operator):
         context.scene.gemini_chat_input = ""
     
         if blender_code:
+            # Track objects before code execution to identify new objects later if needed
+            objects_before = set(bpy.data.objects)
+            materials_before = set(bpy.data.materials)
+            
+            # Add code to history
+            history_index = len(context.scene.gemini_chat_history)
             message = context.scene.gemini_chat_history.add()
             message.type = 'assistant'
             message.content = blender_code
@@ -220,16 +269,91 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                 '__name__': '__main__'
             }
             
+            # First execution attempt with original code
             try:
                 exec(blender_code, namespace)
             except Exception as e:
-                self.report({'ERROR'}, f"Error executing generated code: {e}")
-                context.scene.gemini_button_pressed = False
-                return {'CANCELLED'}
+                if max_fix_attempts <= 0:
+                    self.report({'ERROR'}, f"Error executing code and fixes are disabled: {str(e)}")
+                    context.scene.gemini_button_pressed = False
+                    return {'CANCELLED'}
+                    
+                error_message = f"Error executing generated code: {str(e)}"
+                self.report({'WARNING'}, f"Original code had an error. Attempting to fix (1/{max_fix_attempts})...")
+                
+                # Remove the erroneous code from history
+                context.scene.gemini_chat_history.remove(history_index)
+                
+                # Remove any objects created by the erroneous code
+                objects_after = set(bpy.data.objects)
+                materials_after = set(bpy.data.materials)
+                
+                # Find and remove new objects
+                for obj in objects_after - objects_before:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                
+                # Find and remove new materials
+                for mat in materials_after - materials_before:
+                    bpy.data.materials.remove(mat)
+                
+                # Variable to track current code and previous objects/materials
+                current_code = blender_code
+                current_error = error_message
+                
+                # Loop through fix attempts
+                for attempt in range(1, max_fix_attempts + 1):
+                    # Try to fix the code
+                    fixed_code = fix_blender_code(current_code, current_error, context, system_prompt)
+                    
+                    if not fixed_code:
+                        self.report({'ERROR'}, f"Could not fix the code on attempt {attempt}: {current_error}")
+                        context.scene.gemini_button_pressed = False
+                        return {'CANCELLED'}
+                    
+                    # Add the fixed code to chat history
+                    fix_history_index = len(context.scene.gemini_chat_history)
+                    message = context.scene.gemini_chat_history.add()
+                    message.type = 'assistant'
+                    message.content = fixed_code
+                    
+                    # Try to execute the fixed code
+                    try:
+                        exec(fixed_code, namespace)
+                        self.report({'INFO'}, f"Code fixed and executed successfully on attempt {attempt}!")
+                        break  # Success! Exit the loop
+                    except Exception as e2:
+                        # Fix failed
+                        current_error = f"Error executing fixed code: {str(e2)}"
+                        
+                        # If this isn't the last attempt, prepare for another fix
+                        if attempt < max_fix_attempts:
+                            self.report({'WARNING'}, f"Fix attempt {attempt} had an error. Attempting to fix again ({attempt+1}/{max_fix_attempts})...")
+                            
+                            # Remove the failed fixed code from history
+                            context.scene.gemini_chat_history.remove(fix_history_index)
+                            
+                            # Track and remove objects created by this fix attempt
+                            objects_after_fix = set(bpy.data.objects)
+                            materials_after_fix = set(bpy.data.materials)
+                            
+                            # Find and remove new objects from fix attempt
+                            for obj in objects_after_fix - objects_before:
+                                bpy.data.objects.remove(obj, do_unlink=True)
+                            
+                            # Find and remove new materials from fix attempt
+                            for mat in materials_after_fix - materials_before:
+                                bpy.data.materials.remove(mat)
+                            
+                            # Update current code for next attempt
+                            current_code = fixed_code
+                        else:
+                            # Last attempt failed
+                            self.report({'ERROR'}, f"Error executing code after {max_fix_attempts} fix attempts: {e2}")
+                            context.scene.gemini_button_pressed = False
+                            return {'CANCELLED'}
 
         context.scene.gemini_button_pressed = False
         return {'FINISHED'}
-
 
 def menu_func(self, context):
     self.layout.operator(GEMINI_OT_Execute.bl_idname)
@@ -243,10 +367,58 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
         default="",
         subtype="PASSWORD",
     )
+    
+    temperature: bpy.props.FloatProperty(
+        name="Temperature",
+        description="Controls randomness: Lower values are more deterministic, higher values more creative",
+        default=0.7,
+        min=0.0,
+        max=1.0,
+        precision=2,
+        step=10
+    )
+    
+    top_p: bpy.props.FloatProperty(
+        name="Top P",
+        description="Controls diversity of output via nucleus sampling",
+        default=0.9,
+        min=0.0,
+        max=1.0,
+        precision=2,
+        step=5
+    )
+    
+    top_k: bpy.props.IntProperty(
+        name="Top K",
+        description="Limits token selection to the K most likely tokens",
+        default=1,
+        min=1,
+        max=64
+    )
+    
+    max_fix_attempts: bpy.props.IntProperty(
+        name="Max Fix Attempts",
+        description="Maximum number of times to attempt fixing code errors (0 = don't attempt fixes)",
+        default=1,
+        min=0,
+        max=3
+    )
 
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "api_key")
+
+        layout.separator()
+
+        layout.label(text="Generation Parameters:")
+        layout.prop(self, "temperature")
+        layout.prop(self, "top_p")
+        layout.prop(self, "top_k")
+        
+        layout.separator()
+        
+        layout.label(text="Error Handling:")
+        layout.prop(self, "max_fix_attempts")
 
 def register():
     bpy.utils.register_class(GEMINI_AddonPreferences)
