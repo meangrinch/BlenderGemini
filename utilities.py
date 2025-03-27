@@ -1,6 +1,7 @@
 import bpy
 import requests
 import re
+import time
 
 def get_api_key(context, addon_name):
     preferences = context.preferences
@@ -35,6 +36,34 @@ def clear_props():
     del bpy.types.Scene.gemini_chat_input
     del bpy.types.Scene.gemini_button_pressed
 
+def make_gemini_api_request(url, headers, data):
+    """Makes a request to the Gemini API with retry logic for handling errors."""
+    max_retries = 5
+    wait_time = 1
+    max_wait_time = 16 
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, headers=headers, json=data)
+            response.raise_for_status()
+            
+            return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+            
+        except requests.exceptions.RequestException as e:
+            error_msg = f"API request failed (attempt {attempt+1}/{max_retries}): {str(e)}"
+            print(error_msg)
+            
+            if attempt < max_retries - 1:
+                current_wait = min(wait_time * (2 ** attempt), max_wait_time)
+                print(f"Retrying in {current_wait} seconds...")
+                time.sleep(current_wait)
+            else:
+                print("Maximum retry attempts reached. Giving up.")
+                return None
+        except (KeyError, IndexError) as e:
+            print(f"Error parsing API response: {str(e)}")
+            return None
+
 def generate_blender_code(prompt, chat_history, context, system_prompt):
     api_key = get_api_key(context, "BlenderGemini")
     
@@ -61,24 +90,18 @@ def generate_blender_code(prompt, chat_history, context, system_prompt):
         "generationConfig": {
             "temperature": addon_prefs.temperature,
             "topP": addon_prefs.top_p,
-            "topK": addon_prefs.top_k,
-            "maxOutputTokens": 8192,
+            "topK": addon_prefs.top_k
         }
     }
 
-    try:
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
-        response_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
-        
+    response_text = make_gemini_api_request(url, headers, data)
+    if response_text:
         # Extract code between ```python and ``` markers
         code_match = re.search(r'```(?:python)?(.*?)```', response_text, re.DOTALL)
         if code_match:
             return code_match.group(1).strip()
         return response_text.strip()
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        return None
+    return None
 
 def fix_blender_code(original_code, error_message, context, system_prompt):
     """Generate fixed Blender code based on the error message."""
@@ -122,19 +145,14 @@ Please fix the code to resolve this error. Only provide the corrected code witho
         }
     }
 
-    try:
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
-        response_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
-        
+    response_text = make_gemini_api_request(url, headers, data)
+    if response_text:
         # Extract code between ```python and ``` markers
         code_match = re.search(r'```(?:python)?(.*?)```', response_text, re.DOTALL)
         if code_match:
             return code_match.group(1).strip()
         return response_text.strip()
-    except Exception as e:
-        print(f"Error when trying to fix code: {str(e)}")
-        return None
+    return None
 
 def split_area_to_text_editor(context):
     area = context.area
