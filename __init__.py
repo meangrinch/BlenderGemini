@@ -13,7 +13,7 @@ bl_info = {
     "blender": (2, 82, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 2, 1),
+    "version": (1, 2, 2),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini to perform various tasks.",
     "wiki_url": "",
@@ -328,6 +328,10 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                             self.report({'ERROR'}, f"Error executing code after {max_fix_attempts} fix attempts: {e2}")
                             context.scene.gemini_button_pressed = False
                             return {'CANCELLED'}
+        else:
+            self.report({'ERROR'}, "Failed to generate code from Gemini API. Please check the console for details.")
+            context.scene.gemini_button_pressed = False
+            return {'CANCELLED'}
 
         context.scene.gemini_button_pressed = False
         return {'FINISHED'}
@@ -348,7 +352,7 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
     temperature: bpy.props.FloatProperty(
         name="Temperature",
         description="Controls randomness: Lower values are more deterministic, higher values more creative",
-        default=0.7,
+        default=1.0,
         min=0.0,
         max=1.0,
         precision=2,
@@ -358,7 +362,7 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
     top_p: bpy.props.FloatProperty(
         name="Top P",
         description="Controls diversity of output via nucleus sampling",
-        default=0.9,
+        default=0.95,
         min=0.0,
         max=1.0,
         precision=2,
@@ -368,7 +372,7 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
     top_k: bpy.props.IntProperty(
         name="Top K",
         description="Limits token selection to the K most likely tokens",
-        default=1,
+        default=40,
         min=1,
         max=64
     )
@@ -378,7 +382,7 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
         description="Maximum number of times to attempt fixing code errors (0 = don't attempt fixes)",
         default=1,
         min=0,
-        max=3
+        max=5
     )
 
     def draw(self, context):
