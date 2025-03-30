@@ -83,7 +83,26 @@ def generate_blender_code(prompt, chat_history, context, system_prompt):
         else:
             messages.append({"text": message.content})
 
-    messages.append({"text": "Can you please write Blender code for me that accomplishes the following task: " + prompt + "? Do not respond with anything that is not Python code. Do not provide explanations"})
+    messages.append({"text": "Please write Blender code that accomplishes the following task: " + prompt + ". Return ONLY the Python code without any additional text or explanations."})
+
+    safety_settings_config = [
+        {
+            "category": "HARM_CATEGORY_HARASSMENT",
+            "threshold": "BLOCK_NONE"
+        },
+        {
+            "category": "HARM_CATEGORY_HATE_SPEECH",
+            "threshold": "BLOCK_NONE"
+        },
+        {
+            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "threshold": "BLOCK_NONE"
+        },
+        {
+            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "threshold": "BLOCK_NONE"
+        }
+    ]
 
     data = {
         "contents": [{"parts": messages}],
@@ -91,7 +110,8 @@ def generate_blender_code(prompt, chat_history, context, system_prompt):
             "temperature": addon_prefs.temperature,
             "topP": addon_prefs.top_p,
             "topK": addon_prefs.top_k
-        }
+        },
+        "safetySettings": safety_settings_config
     }
 
     response_text = make_gemini_api_request(url, headers, data)
