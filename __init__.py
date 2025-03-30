@@ -13,7 +13,7 @@ bl_info = {
     "blender": (2, 82, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 2, 2),
+    "version": (1, 2, 3),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini to perform various tasks.",
     "wiki_url": "",
@@ -24,7 +24,7 @@ system_prompt = """You are a Blender Python code assistant:
 
 1. Respond with your answers in markdown (```).
 
-2. When modifying objects:
+2. When creating or modifying objects:
   - Change existing objects when possible
   - Delete and recreate objects if modification isn't feasible
   
@@ -61,42 +61,31 @@ mat_sphere = bpy.data.materials.new(name="RedMetallic")
 mat_sphere.use_nodes = True
 principled_bsdf_sphere = mat_sphere.node_tree.nodes.get("Principled BSDF")
 if principled_bsdf_sphere:
-    # Set Color to Red
     principled_bsdf_sphere.inputs["Base Color"].default_value = (1.0, 0.0, 0.0, 1.0)
-    # Set Metallic
     principled_bsdf_sphere.inputs["Metallic"].default_value = 1.0
-    # Set Roughness (lower for more shine)
     principled_bsdf_sphere.inputs["Roughness"].default_value = 0.2
 
-# Assign material to sphere
 if sphere_obj.data.materials:
     sphere_obj.data.materials[0] = mat_sphere
 else:
     sphere_obj.data.materials.append(mat_sphere)
 
 # --- Create Cube ---
-# Ensure sphere is deselected if needed, though add usually handles this
 bpy.ops.object.select_all(action='DESELECT')
 bpy.ops.mesh.primitive_cube_add(location=(0, 0, 2.0)) # Position above sphere
 cube_obj = bpy.context.object
 cube_obj.name = "GreenChildCube"
 
 # --- Set Cube Transforms ---
-# Scale it down
 cube_obj.scale = (0.5, 0.5, 0.5)
-# Location was set during creation, but can be confirmed/set again:
-# cube_obj.location = (0, 0, 2.0)
 
 # --- Create Cube Material ---
 mat_cube = bpy.data.materials.new(name="GreenDiffuse")
 mat_cube.use_nodes = True
 principled_bsdf_cube = mat_cube.node_tree.nodes.get("Principled BSDF")
 if principled_bsdf_cube:
-    # Set Color to Green
     principled_bsdf_cube.inputs["Base Color"].default_value = (0.0, 1.0, 0.0, 1.0)
-    # Ensure it's not metallic (default is 0, but explicit is fine)
     principled_bsdf_cube.inputs["Metallic"].default_value = 0.0
-    # Default roughness is fine
     principled_bsdf_cube.inputs["Roughness"].default_value = 0.5
 
 # Assign material to cube
@@ -106,17 +95,13 @@ else:
     cube_obj.data.materials.append(mat_cube)
 
 # --- Parent Cube to Sphere ---
-# Ensure objects exist
 if cube_obj and sphere_obj:
-    # Select the child (cube), then the parent (sphere)
     bpy.ops.object.select_all(action='DESELECT')
     cube_obj.select_set(True)
     sphere_obj.select_set(True)
-    bpy.context.view_layer.objects.active = sphere_obj # Set parent as active
-    # Perform parenting
+    bpy.context.view_layer.objects.active = sphere_obj
     bpy.ops.object.parent_set(type='OBJECT', keep_transform=True)
 
-# Deselect all after operation
 bpy.ops.object.select_all(action='DESELECT')
 ```"""
 
@@ -372,7 +357,7 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
     top_k: bpy.props.IntProperty(
         name="Top K",
         description="Limits token selection to the K most likely tokens",
-        default=40,
+        default=1,
         min=1,
         max=64
     )
