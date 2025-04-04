@@ -77,14 +77,13 @@ def generate_blender_code(prompt, chat_history, context, system_prompt):
         "x-goog-api-key": api_key
     }
 
-    messages = [{"text": system_prompt}]
-    for message in chat_history[-10:]:
-        if message.type == "assistant":
-            messages.append({"text": "```\n" + message.content + "\n```"})
-        else:
-            messages.append({"text": message.content})
+    contents = []
+    for message in chat_history[-10:]: # Keep last 10 messages for context
+        role = "user" if message.type == "user" else "model"
+        content = message.content if message.type == "user" else "```\n" + message.content + "\n```"
+        contents.append({"role": role, "parts": [{"text": content}]})
 
-    messages.append({"text": "Please write Blender code that accomplishes the following task: " + prompt + ". Return ONLY the Python code without any additional text or explanations."})
+    contents.append({"role": "user", "parts": [{"text": prompt}]})
 
     safety_settings_config = [
         {
@@ -106,7 +105,10 @@ def generate_blender_code(prompt, chat_history, context, system_prompt):
     ]
 
     data = {
-        "contents": [{"parts": messages}],
+        "systemInstruction": {
+             "parts": [{"text": system_prompt}]
+        },
+        "contents": contents,
         "generationConfig": {
             "temperature": addon_prefs.temperature,
             "topP": addon_prefs.top_p,
@@ -152,18 +154,24 @@ But it produced this error:
 Please fix the code to resolve this error. Only provide the corrected code without any explanation or additional text. The fixed code should accomplish the same task as the original code but without errors."""
 
     data = {
+         "systemInstruction": {
+             "parts": [{"text": system_prompt}]
+         },
         "contents": [{
-            "parts": [
-                {"text": system_prompt},
-                {"text": fix_prompt}
-            ]
+            "role": "user",
+            "parts": [{"text": fix_prompt}]
         }],
         "generationConfig": {
             "temperature": addon_prefs.temperature,
             "topP": addon_prefs.top_p,
-            "topK": addon_prefs.top_k,
-            "maxOutputTokens": 8192,
-        }
+            "topK": addon_prefs.top_k
+        },
+         "safetySettings": [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+         ]
     }
 
     response_text = make_gemini_api_request(url, headers, data)

@@ -13,43 +13,41 @@ bl_info = {
     "blender": (2, 82, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 2, 3),
+    "version": (1, 2, 4),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini to perform various tasks.",
     "wiki_url": "",
     "tracker_url": "",
 }
 
-system_prompt = """You are a Blender Python code assistant:
+system_prompt = """You are a Blender Python (`bpy`) code assistant:
 
-1. Respond with your answers in markdown (```).
+1. Respond **only** with valid Blender Python code.
+2. Prioritize modifying existing objects. If modification is complex or unsuitable, delete and recreate the object.
+3. When creating objects, apply relevant attributes where appropriate:
+    -   Materials: Use nodes (Principled BSDF preferred). Set color, roughness, metallic, etc.
+    -   Textures/UVs: Apply image textures and set up UV maps.
+    -   **Transforms: Set location, rotation, scale.
+    -   Modifiers: Use for non-destructive effects (e.g., Bevel, Subdivision Surface).
+    -   Custom Properties: Add if requested or necessary.
+    -   Parenting: Establish parent-child relationships.
+4. Avoid destructive mesh edits in Edit Mode unless absolutely necessary or requested. Prefer non-destructive methods.
+5. Prefer direct data API access over `bpy.ops` where feasible (e.g., setting transforms, assigning materials, parenting).
+6. Do not invent non-existent parameters (e.g., `segments`, `cap_ends`, `specular`).
+7. Do not add cameras, lights, render settings, or unrelated setup unless asked.
 
-2. When creating or modifying objects:
-  - Change existing objects when possible
-  - Delete and recreate objects if modification isn't feasible
-  
-3. When creating objects, consider and implement where appropriate:
-  - Materials: Use nodes. Set properties (color, metallic, roughness, etc.)
-  - Textures/UVs: Apply textures, set up UV mapping
-  - Transforms: Set location, rotation, scale
-  - Modifiers: Use for non-destructive effects
-  - Custom Properties: Add when needed
-  - Parenting: Establish parent-child relationships
-  
-4. Do not perform destructive operations on the meshes.
-
-5. Do not invent non-existent parameters like 'segments', 'cap_ends', or 'specular'.
-
-6. Do not do more than what is asked (setting up render settings, adding cameras, etc.,).
-
-7. Do not respond with anything that is not Python code.
-
+---
 Example:
 
-user: Create a sphere and make it metallic red. Add a cube, make it smaller, color it green, position it 2 units above the sphere, and parent the cube to the sphere.
+user: Create a simple red metallic cube with slightly rounded edges at location (1, 2, 3).
 assistant:
 ```
 import bpy
+
+# Deselect all to ensure clean state, good practice
+if bpy.context.active_object and bpy.context.active_object.mode == 'EDIT':
+    bpy.ops.object.mode_set(mode='OBJECT')
+bpy.ops.object.select_all(action='DESELECT')
 
 # --- Create Sphere ---
 bpy.ops.mesh.primitive_uv_sphere_add(location=(0, 0, 0))
@@ -61,32 +59,34 @@ mat_sphere = bpy.data.materials.new(name="RedMetallic")
 mat_sphere.use_nodes = True
 principled_bsdf_sphere = mat_sphere.node_tree.nodes.get("Principled BSDF")
 if principled_bsdf_sphere:
-    principled_bsdf_sphere.inputs["Base Color"].default_value = (1.0, 0.0, 0.0, 1.0)
-    principled_bsdf_sphere.inputs["Metallic"].default_value = 1.0
-    principled_bsdf_sphere.inputs["Roughness"].default_value = 0.2
+    principled_bsdf_sphere.inputs["Base Color"].default_value = (0.8, 0.0, 0.0, 1.0) # Red
+    principled_bsdf_sphere.inputs["Metallic"].default_value = 1.0 # Fully metallic
+    principled_bsdf_sphere.inputs["Roughness"].default_value = 0.2 # Slightly rough
 
+# Assign material to sphere
 if sphere_obj.data.materials:
     sphere_obj.data.materials[0] = mat_sphere
 else:
     sphere_obj.data.materials.append(mat_sphere)
 
 # --- Create Cube ---
-bpy.ops.object.select_all(action='DESELECT')
-bpy.ops.mesh.primitive_cube_add(location=(0, 0, 2.0)) # Position above sphere
+# Create at final location relative to world origin before parenting
+cube_location = (sphere_obj.location.x, sphere_obj.location.y, sphere_obj.location.z + 2.0)
+bpy.ops.mesh.primitive_cube_add(location=cube_location)
 cube_obj = bpy.context.object
-cube_obj.name = "GreenChildCube"
+cube_obj.name = "GreenBeveledChildCube"
 
 # --- Set Cube Transforms ---
-cube_obj.scale = (0.5, 0.5, 0.5)
+cube_obj.scale = (0.5, 0.5, 0.5) # Half size
 
 # --- Create Cube Material ---
-mat_cube = bpy.data.materials.new(name="GreenDiffuse")
+mat_cube = bpy.data.materials.new(name="GreenMaterial")
 mat_cube.use_nodes = True
 principled_bsdf_cube = mat_cube.node_tree.nodes.get("Principled BSDF")
 if principled_bsdf_cube:
-    principled_bsdf_cube.inputs["Base Color"].default_value = (0.0, 1.0, 0.0, 1.0)
-    principled_bsdf_cube.inputs["Metallic"].default_value = 0.0
-    principled_bsdf_cube.inputs["Roughness"].default_value = 0.5
+    principled_bsdf_cube.inputs["Base Color"].default_value = (0.0, 0.8, 0.0, 1.0) # Green
+    principled_bsdf_cube.inputs["Metallic"].default_value = 0.1 # Slightly metallic
+    principled_bsdf_cube.inputs["Roughness"].default_value = 0.5 # Medium roughness
 
 # Assign material to cube
 if cube_obj.data.materials:
@@ -94,14 +94,23 @@ if cube_obj.data.materials:
 else:
     cube_obj.data.materials.append(mat_cube)
 
-# --- Parent Cube to Sphere ---
-if cube_obj and sphere_obj:
-    bpy.ops.object.select_all(action='DESELECT')
-    cube_obj.select_set(True)
-    sphere_obj.select_set(True)
-    bpy.context.view_layer.objects.active = sphere_obj
-    bpy.ops.object.parent_set(type='OBJECT', keep_transform=True)
+# --- Add Bevel Modifier to Cube ---
+bevel_mod = cube_obj.modifiers.new(name="BevelEdges", type='BEVEL')
+bevel_mod.width = 0.05 # Adjust width as needed for small cube
+bevel_mod.segments = 3 # Increase segments for smoother rounding
 
+# --- Apply Smooth Shading to Cube ---
+# Select and make active for the operator
+bpy.context.view_layer.objects.active = cube_obj
+cube_obj.select_set(True)
+bpy.ops.object.shade_smooth()
+
+# --- Parent Cube to Sphere (Direct Method) ---
+# Since cube was created at its final world location, direct parenting works
+# Its location will now be interpreted relative to the parent
+cube_obj.parent = sphere_obj
+
+# Deselect all at the end
 bpy.ops.object.select_all(action='DESELECT')
 ```"""
 
@@ -337,7 +346,7 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
     temperature: bpy.props.FloatProperty(
         name="Temperature",
         description="Controls randomness: Lower values are more deterministic, higher values more creative",
-        default=1.0,
+        default=0.35,
         min=0.0,
         max=1.0,
         precision=2,
