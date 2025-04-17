@@ -8,12 +8,13 @@ if libs_path not in sys.path:
     sys.path.append(libs_path)
 
 from .utilities import *
+
 bl_info = {
     "name": "Gemini Blender Assistant",
     "blender": (2, 82, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 2, 4),
+    "version": (1, 2, 5),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini to perform various tasks.",
     "wiki_url": "",
@@ -24,10 +25,10 @@ system_prompt = """You are a Blender Python (`bpy`) code assistant:
 
 1. Respond **only** with valid Blender Python code.
 2. Prioritize modifying existing objects. If modification is complex or unsuitable, delete and recreate the object.
-3. When creating objects, apply relevant attributes where appropriate:
+3. When creating objects, consider and implement relevant attributes where appropriate:
     -   Materials: Use nodes (Principled BSDF preferred). Set color, roughness, metallic, etc.
     -   Textures/UVs: Apply image textures and set up UV maps.
-    -   **Transforms: Set location, rotation, scale.
+    -   Transforms: Set location, rotation, scale.
     -   Modifiers: Use for non-destructive effects (e.g., Bevel, Subdivision Surface).
     -   Custom Properties: Add if requested or necessary.
     -   Parenting: Establish parent-child relationships.
@@ -112,23 +113,25 @@ cube_obj.parent = sphere_obj
 
 # Deselect all at the end
 bpy.ops.object.select_all(action='DESELECT')
-```"""
+```"""  # noqa
+
 
 class GEMINI_OT_DeleteMessage(bpy.types.Operator):
     bl_idname = "gemini.delete_message"
     bl_label = "Delete Message"
-    bl_options = {'REGISTER', 'UNDO'}
+    bl_options = {"REGISTER", "UNDO"}
 
     message_index: bpy.props.IntProperty()
 
     def execute(self, context):
         context.scene.gemini_chat_history.remove(self.message_index)
-        return {'FINISHED'}
+        return {"FINISHED"}
+
 
 class GEMINI_OT_ShowCode(bpy.types.Operator):
     bl_idname = "gemini.show_code"
     bl_label = "Show Code"
-    bl_options = {'REGISTER', 'UNDO'}
+    bl_options = {"REGISTER", "UNDO"}
 
     code: bpy.props.StringProperty(
         name="Code",
@@ -147,23 +150,24 @@ class GEMINI_OT_ShowCode(bpy.types.Operator):
 
         text_editor_area = None
         for area in context.screen.areas:
-            if area.type == 'TEXT_EDITOR':
+            if area.type == "TEXT_EDITOR":
                 text_editor_area = area
                 break
 
         if text_editor_area is None:
             text_editor_area = split_area_to_text_editor(context)
-        
+
         text_editor_area.spaces.active.text = text
 
-        return {'FINISHED'}
+        return {"FINISHED"}
+
 
 class GEMINI_PT_Panel(bpy.types.Panel):
     bl_label = "Gemini Blender Assistant"
     bl_idname = "GEMINI_PT_Panel"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = 'Gemini Assistant'
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Gemini Assistant"
 
     def draw(self, context):
         layout = self.layout
@@ -172,7 +176,7 @@ class GEMINI_PT_Panel(bpy.types.Panel):
         column.label(text="Chat history:")
         box = column.box()
         for index, message in enumerate(context.scene.gemini_chat_history):
-            if message.type == 'assistant':
+            if message.type == "assistant":
                 row = box.row()
                 row.label(text="Assistant: ")
                 show_code_op = row.operator("gemini.show_code", text="Show Code")
@@ -186,9 +190,13 @@ class GEMINI_PT_Panel(bpy.types.Panel):
                 delete_message_op.message_index = index
 
         column.separator()
-        
+
         column.label(text="Gemini Model:")
         column.prop(context.scene, "gemini_model", text="")
+
+        # Conditionally show the 'Enable Thinking' toggle
+        if context.scene.gemini_model == "gemini-2.5-flash-preview-04-17":
+            column.prop(context.scene, "gemini_include_thoughts")
 
         column.label(text="Enter your message:")
         column.prop(context.scene, "gemini_chat_input", text="")
@@ -199,19 +207,21 @@ class GEMINI_PT_Panel(bpy.types.Panel):
 
         column.separator()
 
+
 class GEMINI_OT_ClearChat(bpy.types.Operator):
     bl_idname = "gemini.clear_chat"
     bl_label = "Clear Chat"
-    bl_options = {'REGISTER', 'UNDO'}
+    bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         context.scene.gemini_chat_history.clear()
-        return {'FINISHED'}
+        return {"FINISHED"}
+
 
 class GEMINI_OT_Execute(bpy.types.Operator):
     bl_idname = "gemini.send_message"
     bl_label = "Send Message"
-    bl_options = {'REGISTER', 'UNDO'}
+    bl_options = {"REGISTER", "UNDO"}
 
     natural_language_input: bpy.props.StringProperty(
         name="Command",
@@ -225,113 +235,116 @@ class GEMINI_OT_Execute(bpy.types.Operator):
             api_key = os.getenv("GEMINI_API_KEY")
 
         if not api_key:
-            self.report({'ERROR'}, "No API key detected. Please set your Gemini API key in the addon preferences.")
-            return {'CANCELLED'}
+            self.report({"ERROR"}, "No API key detected. Please set your Gemini API key in the addon preferences.")
+            return {"CANCELLED"}
 
         preferences = context.preferences
         addon_prefs = preferences.addons[__name__].preferences
         max_fix_attempts = addon_prefs.max_fix_attempts
 
         context.scene.gemini_button_pressed = True
-        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
-        
-        blender_code = generate_blender_code(context.scene.gemini_chat_input, context.scene.gemini_chat_history, context, system_prompt)
+        bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+
+        blender_code = generate_blender_code(
+            context.scene.gemini_chat_input, context.scene.gemini_chat_history, context, system_prompt
+        )
 
         message = context.scene.gemini_chat_history.add()
-        message.type = 'user'
+        message.type = "user"
         message.content = context.scene.gemini_chat_input
 
         context.scene.gemini_chat_input = ""
-    
+
         if blender_code:
             objects_before = set(bpy.data.objects)
             materials_before = set(bpy.data.materials)
-            
+
             history_index = len(context.scene.gemini_chat_history)
             message = context.scene.gemini_chat_history.add()
-            message.type = 'assistant'
+            message.type = "assistant"
             message.content = blender_code
 
-            namespace = {
-                'bpy': bpy,
-                'context': context,
-                '__name__': '__main__'
-            }
-            
+            namespace = {"bpy": bpy, "context": context, "__name__": "__main__"}
+
             try:
                 exec(blender_code, namespace)
             except Exception as e:
                 if max_fix_attempts <= 0:
-                    self.report({'ERROR'}, f"Error executing code and fixes are disabled: {str(e)}")
+                    self.report({"ERROR"}, f"Error executing code and fixes are disabled: {str(e)}")
                     context.scene.gemini_button_pressed = False
-                    return {'CANCELLED'}
-                    
+                    return {"CANCELLED"}
+
                 error_message = f"Error executing generated code: {str(e)}"
-                self.report({'WARNING'}, f"Original code had an error. Attempting to fix (1/{max_fix_attempts})...")
-                
+                self.report({"WARNING"}, f"Original code had an error. Attempting to fix (1/{max_fix_attempts})...")
+
                 context.scene.gemini_chat_history.remove(history_index)
-                
+
                 objects_after = set(bpy.data.objects)
                 materials_after = set(bpy.data.materials)
-                
+
                 for obj in objects_after - objects_before:
                     bpy.data.objects.remove(obj, do_unlink=True)
-                
+
                 for mat in materials_after - materials_before:
                     bpy.data.materials.remove(mat)
-                
+
                 current_code = blender_code
                 current_error = error_message
-                
+
                 for attempt in range(1, max_fix_attempts + 1):
                     fixed_code = fix_blender_code(current_code, current_error, context, system_prompt)
-                    
+
                     if not fixed_code:
-                        self.report({'ERROR'}, f"Could not fix the code on attempt {attempt}: {current_error}")
+                        self.report({"ERROR"}, f"Could not fix the code on attempt {attempt}: {current_error}")
                         context.scene.gemini_button_pressed = False
-                        return {'CANCELLED'}
-                    
+                        return {"CANCELLED"}
+
                     fix_history_index = len(context.scene.gemini_chat_history)
                     message = context.scene.gemini_chat_history.add()
-                    message.type = 'assistant'
+                    message.type = "assistant"
                     message.content = fixed_code
-                    
+
                     try:
                         exec(fixed_code, namespace)
-                        self.report({'INFO'}, f"Code fixed and executed successfully on attempt {attempt}!")
+                        self.report({"INFO"}, f"Code fixed and executed successfully on attempt {attempt}!")
                         break
                     except Exception as e2:
                         current_error = f"Error executing fixed code: {str(e2)}"
-                        
+
                         if attempt < max_fix_attempts:
-                            self.report({'WARNING'}, f"Fix attempt {attempt} had an error. Attempting to fix again ({attempt+1}/{max_fix_attempts})...")
-                            
+                            self.report(
+                                {"WARNING"},
+                                f"Fix attempt {attempt} had an error. Attempting to fix again ({attempt+1}/{max_fix_attempts})...",
+                            )
+
                             context.scene.gemini_chat_history.remove(fix_history_index)
-                            
+
                             objects_after_fix = set(bpy.data.objects)
                             materials_after_fix = set(bpy.data.materials)
-                            
+
                             for obj in objects_after_fix - objects_before:
                                 bpy.data.objects.remove(obj, do_unlink=True)
-                            
+
                             for mat in materials_after_fix - materials_before:
                                 bpy.data.materials.remove(mat)
-                            
+
                             current_code = fixed_code
                         else:
-                            self.report({'ERROR'}, f"Error executing code after {max_fix_attempts} fix attempts: {e2}")
+                            self.report({"ERROR"}, f"Error executing code after {max_fix_attempts} fix attempts: {e2}")
                             context.scene.gemini_button_pressed = False
-                            return {'CANCELLED'}
+                            return {"CANCELLED"}
         else:
-            self.report({'ERROR'}, "Failed to generate code from Gemini API. Please check the console for details.")
+            self.report({"ERROR"}, "Failed to generate code from Gemini API. Please check the console for details.")
             context.scene.gemini_button_pressed = False
-            return {'CANCELLED'}
+            return {"CANCELLED"}
 
         context.scene.gemini_button_pressed = False
-        return {'FINISHED'}
+        return {"FINISHED"}
+
 
 def menu_func(self, context):
     self.layout.operator(GEMINI_OT_Execute.bl_idname)
+
 
 class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
@@ -342,7 +355,7 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
         default="",
         subtype="PASSWORD",
     )
-    
+
     temperature: bpy.props.FloatProperty(
         name="Temperature",
         description="Controls randomness: Lower values are more deterministic, higher values more creative",
@@ -350,9 +363,9 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
         min=0.0,
         max=1.0,
         precision=2,
-        step=10
+        step=10,
     )
-    
+
     top_p: bpy.props.FloatProperty(
         name="Top P",
         description="Controls diversity of output via nucleus sampling",
@@ -360,23 +373,23 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
         min=0.0,
         max=1.0,
         precision=2,
-        step=5
+        step=5,
     )
-    
+
     top_k: bpy.props.IntProperty(
         name="Top K",
         description="Limits token selection to the K most likely tokens",
-        default=1,
-        min=1,
-        max=64
+        default=64,
+        min=0,
+        max=64,
     )
-    
+
     max_fix_attempts: bpy.props.IntProperty(
         name="Max Fix Attempts",
         description="Maximum number of times to attempt fixing code errors (0 = don't attempt fixes)",
         default=1,
         min=0,
-        max=5
+        max=5,
     )
 
     def draw(self, context):
@@ -389,11 +402,12 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
         layout.prop(self, "temperature")
         layout.prop(self, "top_p")
         layout.prop(self, "top_k")
-        
+
         layout.separator()
-        
+
         layout.label(text="Error Handling:")
         layout.prop(self, "max_fix_attempts")
+
 
 def register():
     bpy.utils.register_class(GEMINI_AddonPreferences)
@@ -402,7 +416,6 @@ def register():
     bpy.utils.register_class(GEMINI_PT_Panel)
     bpy.utils.register_class(GEMINI_OT_ClearChat)
     bpy.utils.register_class(GEMINI_OT_ShowCode)
-
 
     bpy.types.VIEW3D_MT_mesh_add.append(menu_func)
     init_props()
