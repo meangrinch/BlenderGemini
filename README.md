@@ -26,8 +26,9 @@ Note: If the generated code produced an error, Gemini will automatically attempt
 
 ## Models Available
 
-- Gemini 2.0 Flash
-- Gemini 2.0 Flash Lite
-- Gemini 2.0 Flash Thinking Experimental 01-21
 - Gemini 2.5 Pro Experimental 03-25
 - Gemini 2.5 Pro Preview 03-25
+- Gemini 2.5 Flash Preview 04-17
+- Gemini 2.0 Flash
+- Gemini 2.0 Flash Thinking Experimental 01-21
+- Gemini 2.0 Flash Lite
