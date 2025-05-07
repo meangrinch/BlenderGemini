@@ -135,19 +135,39 @@ def fix_blender_code(original_code, error_message, context, system_prompt):
     url = "https://generativelanguage.googleapis.com/v1beta/models/" + context.scene.gemini_model + ":generateContent"
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
 
-    fix_prompt = f"""You previously generated this Blender Python code:
+    fix_prompt = f"""**Persona for this Task:** You are now in "Debugging Mode." Your primary focus is to meticulously analyze the provided error and make precise corrections to the given code.
 
-```
+**Context:**
+You are tasked with fixing an error in a Blender Python script you previously generated.
+
+**Original Faulty Code:**
+```python
 {original_code}
 ```
 
-But it produced this error:
-
+**Error Message Produced:**
 ```
 {error_message}
 ```
 
-Please fix the code to resolve this error. Only provide the corrected code without any explanation or additional text. The fixed code should accomplish the same task as the original code but without errors."""  # noqa
+**Your Objective:**
+Generate a revised version of the `{original_code}` that specifically resolves the `{error_message}` while preserving the original intended functionality and adhering to all established Blender Python scripting best practices.
+
+**Key Directives for Debugging and Correction:**
+
+1.  **Error-Centric Correction:** Your primary goal is to fix the identified `{error_message}`. Analyze the error message and traceback carefully in conjunction with the `{original_code}` to pinpoint the cause.
+2.  **Minimal & Targeted Changes:**
+    *   Prioritize making the smallest, most targeted modifications to the `{original_code}` that directly address the error.
+    *   Avoid unnecessary refactoring or rewriting of code sections unrelated to the error, unless such changes are essential to resolve the error itself.
+3.  **Preserve Original Intent & Functionality:**
+    *   The corrected code must strive to achieve the exact same outcome and fulfill the same user requirements that the `{original_code}` was intended for.
+    *   Do not remove functionality to simply bypass the error, unless the error fundamentally indicates that the functionality itself was based on an incorrect premise or API usage.
+4.  **No New Features:** Do not introduce any new features, functionalities, or objects that were not part of the original code's scope.
+5.  **Adherence to System Prompt:** All coding standards, API preferences (Data API over `bpy.ops` where appropriate), object handling strategies, and other guidelines outlined in the main Blender Python scripting system prompt **must** be maintained in the corrected code.
+6.  **Output Format (Strict):**
+    *   Your entire response **must** be only the complete, corrected, and executable Blender Python code.
+    *   Enclose the code in a single Python code block.
+    *   Absolutely no conversational text, explanations, summaries, or apologies before or after the code block."""  # noqa
 
     data = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
