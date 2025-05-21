@@ -29,6 +29,7 @@ Note: If the generated code produced an error, Gemini will automatically attempt
 - Gemini 2.5 Pro Preview 05-06
 - Gemini 2.5 Pro Preview 03-25
 - Gemini 2.5 Pro Experimental 03-25
+- Gemini 2.5 Flash Preview 05-20
 - Gemini 2.5 Flash Preview 04-17
 - Gemini 2.0 Flash
 - Gemini 2.0 Flash Lite
