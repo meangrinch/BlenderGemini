@@ -14,7 +14,7 @@ bl_info = {
     "blender": (2, 82, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 2, 7),
+    "version": (1, 2, 8),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini to perform various tasks.",
     "wiki_url": "",
@@ -257,8 +257,8 @@ class GEMINI_PT_Panel(bpy.types.Panel):
         column.prop(context.scene, "gemini_model", text="")
 
         # Conditionally show the 'Enable Thinking' toggle
-        if context.scene.gemini_model == "gemini-2.5-flash-preview-04-17":
-            column.prop(context.scene, "gemini_include_thoughts")
+        if "gemini-2.5-flash" in context.scene.gemini_model:
+            column.prop(context.scene, "gemini_enable_thinking")
 
         column.label(text="Enter your message:")
         column.prop(context.scene, "gemini_chat_input", text="")

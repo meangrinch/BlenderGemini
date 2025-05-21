@@ -19,11 +19,12 @@ def init_props():
             ("gemini-2.5-pro-preview-05-06", "Gemini 2.5 Pro Preview 05-06", "Use Gemini 2.5 Pro Preview 05-06"),
             ("gemini-2.5-pro-preview-03-25", "Gemini 2.5 Pro Preview 03-25", "Use Gemini 2.5 Pro Preview 03-25"),
             ("gemini-2.5-pro-exp-03-25", "Gemini 2.5 Pro Exp 03-25", "Use Gemini 2.5 Pro Experimental"),
-            ("gemini-2.5-flash-preview-04-17", "Gemini 2.5 Flash Preview 04-17", "Use Gemini 2.5 Flash Preview"),
+            ("gemini-2.5-flash-preview-05-20", "Gemini 2.5 Flash Preview 05-20", "Use Gemini 2.5 Flash Preview 05-20"),
+            ("gemini-2.5-flash-preview-04-17", "Gemini 2.5 Flash Preview 04-17", "Use Gemini 2.5 Flash Preview 04-17"),
             ("gemini-2.0-flash", "Gemini 2.0 Flash", "Use Gemini 2.0 Flash"),
             ("gemini-2.0-flash-lite", "Gemini 2.0 Flash Lite", "Use Gemini 2.0 Flash Lite"),
         ],
-        default="gemini-2.5-pro-exp-03-25",
+        default="gemini-2.5-flash-preview-05-20",
     )
     bpy.types.Scene.gemini_chat_input = bpy.props.StringProperty(
         name="Message",
@@ -33,7 +34,7 @@ def init_props():
     bpy.types.Scene.gemini_button_pressed = bpy.props.BoolProperty(default=False)
     bpy.types.PropertyGroup.type = bpy.props.StringProperty()
     bpy.types.PropertyGroup.content = bpy.props.StringProperty()
-    bpy.types.Scene.gemini_include_thoughts = bpy.props.BoolProperty(
+    bpy.types.Scene.gemini_enable_thinking = bpy.props.BoolProperty(
         name="Enable Thinking",
         description="Enable model's thinking capabilities in the response (only for compatible models)",
         default=True,
@@ -44,7 +45,7 @@ def clear_props():
     del bpy.types.Scene.gemini_chat_history
     del bpy.types.Scene.gemini_chat_input
     del bpy.types.Scene.gemini_button_pressed
-    del bpy.types.Scene.gemini_include_thoughts
+    del bpy.types.Scene.gemini_enable_thinking
 
 
 def make_gemini_api_request(url, headers, data):
@@ -112,8 +113,8 @@ def generate_blender_code(prompt, chat_history, context, system_prompt):
     }
 
     # Conditionally add thinkingConfig for specific model
-    if context.scene.gemini_model == "gemini-2.5-flash-preview-04-17" and context.scene.gemini_include_thoughts:
-        data["generationConfig"]["thinkingConfig"] = {"includeThoughts": True}
+    if "gemini-2.5-flash" in context.scene.gemini_model and not context.scene.gemini_enable_thinking:
+        data["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
 
     response_text = make_gemini_api_request(url, headers, data)
     if response_text:
@@ -186,8 +187,8 @@ Generate a revised version of the `{original_code}` that specifically resolves t
     }
 
     # Conditionally add thinkingConfig for specific model
-    if context.scene.gemini_model == "gemini-2.5-flash-preview-04-17" and context.scene.gemini_include_thoughts:
-        data["generationConfig"]["thinkingConfig"] = {"includeThoughts": True}
+    if "gemini-2.5-flash" in context.scene.gemini_model and not context.scene.gemini_enable_thinking:
+        data["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
 
 
     response_text = make_gemini_api_request(url, headers, data)
