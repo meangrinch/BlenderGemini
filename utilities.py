@@ -135,39 +135,38 @@ def fix_blender_code(original_code, error_message, context, system_prompt):
     url = "https://generativelanguage.googleapis.com/v1beta/models/" + context.scene.gemini_model + ":generateContent"
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
 
-    fix_prompt = f"""**Persona for this Task:** You are now in "Debugging Mode." Your primary focus is to meticulously analyze the provided error and make precise corrections to the given code.
+    fix_prompt = f"""**Persona:**
+You are a `bpy` Debugging Specialist. Your sole function is to analyze the provided faulty Python script and its corresponding error message, and then generate a corrected, fully functional version.
 
-**Context:**
-You are tasked with fixing an error in a Blender Python script you previously generated.
+**Task Context:**
+You will be given a script that failed during execution and the error traceback it produced.
 
-**Original Faulty Code:**
+**[FAULTY SCRIPT]:**
 ```python
 {original_code}
 ```
 
-**Error Message Produced:**
+**[ERROR TRACEBACK]:**
 ```
 {error_message}
 ```
 
-**Your Objective:**
-Generate a revised version of the `{original_code}` that specifically resolves the `{error_message}` while preserving the original intended functionality and adhering to all established Blender Python scripting best practices.
+**Core Directives for Correction:**
 
-**Key Directives for Debugging and Correction:**
+1.  **Root Cause Analysis:** Your first step is to perform a root cause analysis. Meticulously trace the error from the `[ERROR TRACEBACK]` to the specific line and function call in the `[FAULTY SCRIPT]`. Understand *why* the error occurred (e.g., incorrect parameter, wrong object type, context issue).
 
-1.  **Error-Centric Correction:** Your primary goal is to fix the identified `{error_message}`. Analyze the error message and traceback carefully in conjunction with the `{original_code}` to pinpoint the cause.
-2.  **Minimal & Targeted Changes:**
-    *   Prioritize making the smallest, most targeted modifications to the `{original_code}` that directly address the error.
-    *   Avoid unnecessary refactoring or rewriting of code sections unrelated to the error, unless such changes are essential to resolve the error itself.
-3.  **Preserve Original Intent & Functionality:**
-    *   The corrected code must strive to achieve the exact same outcome and fulfill the same user requirements that the `{original_code}` was intended for.
-    *   Do not remove functionality to simply bypass the error, unless the error fundamentally indicates that the functionality itself was based on an incorrect premise or API usage.
-4.  **No New Features:** Do not introduce any new features, functionalities, or objects that were not part of the original code's scope.
-5.  **Adherence to System Prompt:** All coding standards, API preferences (Data API over `bpy.ops` where appropriate), object handling strategies, and other guidelines outlined in the main Blender Python scripting system prompt **must** be maintained in the corrected code.
-6.  **Output Format (Strict):**
-    *   Your entire response **must** be only the complete, corrected, and executable Blender Python code.
-    *   Enclose the code in a single Python code block.
-    *   Absolutely no conversational text, explanations, summaries, or apologies before or after the code block."""  # noqa
+2.  **Surgical Correction:** The goal is precision. Make the minimum necessary changes to the code to resolve the error. Avoid refactoring or altering code that is unrelated to the bug.
+
+3.  **Preserve Original Intent:** The corrected script **must** achieve the exact same outcome that the `[FAULTY SCRIPT]` was intended for. Do not remove or comment out functionality to bypass the error; fix the underlying issue.
+
+4.  **Maintain Coding Standards:** The fix must adhere to `bpy` best practices.
+    *   **API Preference:** Use the Data API (`bpy.data`) over the Operator API (`bpy.ops`) for property modifications.
+    *   **Parameter Integrity:** Ensure all function/operator parameters are valid and exist in the API. Do not invent arguments. This is a common source of errors.
+
+5.  **Strict Output Mandate:**
+    *   Your response **MUST** be only the complete, corrected, and executable Python script.
+    *   Enclose the entire script in a single Python code block.
+    *   **DO NOT** include any conversational text, explanations, summaries of changes, or apologies. Your output will be executed directly."""  # noqa
 
     data = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -188,7 +187,6 @@ Generate a revised version of the `{original_code}` that specifically resolves t
     # Conditionally add thinkingConfig for specific model
     if "gemini-2.5-flash" in context.scene.gemini_model and not context.scene.gemini_enable_thinking:
         data["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
-
 
     response_text = make_gemini_api_request(url, headers, data)
     if response_text:
