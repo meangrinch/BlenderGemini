@@ -16,14 +16,14 @@ def init_props():
         name="Gemini Model",
         description="Select the Gemini model to use",
         items=[
-            ("gemini-2.5-pro-preview-06-05", "Gemini 2.5 Pro Preview 06-05", "Use Gemini 2.5 Pro Preview 06-05"),
-            ("gemini-2.5-pro-preview-05-06", "Gemini 2.5 Pro Preview 05-06", "Use Gemini 2.5 Pro Preview 05-06"),
+            ("gemini-2.5-pro", "Gemini 2.5 Pro", "Use Gemini 2.5 Pro"),
+            ("gemini-2.5-flash", "Gemini 2.5 Flash", "Use Gemini 2.5 Flash"),
+            ("gemini-2.5-flash-lite-preview-06-17", "Gemini 2.5 Flash Lite Preview 06-17", "Use Gemini 2.5 Flash Lite Preview 06-17"),
             ("gemini-2.5-flash-preview-05-20", "Gemini 2.5 Flash Preview 05-20", "Use Gemini 2.5 Flash Preview 05-20"),
-            ("gemini-2.5-flash-preview-04-17", "Gemini 2.5 Flash Preview 04-17", "Use Gemini 2.5 Flash Preview 04-17"),
             ("gemini-2.0-flash", "Gemini 2.0 Flash", "Use Gemini 2.0 Flash"),
             ("gemini-2.0-flash-lite", "Gemini 2.0 Flash Lite", "Use Gemini 2.0 Flash Lite"),
         ],
-        default="gemini-2.5-flash-preview-05-20",
+        default="gemini-2.5-flash",
     )
     bpy.types.Scene.gemini_chat_input = bpy.props.StringProperty(
         name="Message",
