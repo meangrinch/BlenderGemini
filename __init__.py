@@ -22,9 +22,9 @@ bl_info = {
     "blender": (2, 82, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 2, 11),
+    "version": (1, 2, 12),
     "location": "3D View > UI > Gemini Blender Assistant",
-    "description": "Generate Blender Python code using Google's Gemini to perform various tasks.",
+    "description": "Generate Blender Python code using Google's Gemini.",
     "wiki_url": "",
     "tracker_url": "",
 }
@@ -332,7 +332,7 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                         if attempt < max_fix_attempts:
                             self.report(
                                 {"WARNING"},
-                                f"Fix attempt {attempt} had an error. Attempting to fix again ({attempt+1}/{max_fix_attempts})...",
+                                f"Fix attempt {attempt} had an error. Attempting to fix again ({attempt + 1}/{max_fix_attempts})...",
                             )
 
                             context.scene.gemini_chat_history.remove(fix_history_index)

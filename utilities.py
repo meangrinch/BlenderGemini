@@ -18,8 +18,7 @@ def init_props():
         items=[
             ("gemini-2.5-pro", "Gemini 2.5 Pro", "Use Gemini 2.5 Pro"),
             ("gemini-2.5-flash", "Gemini 2.5 Flash", "Use Gemini 2.5 Flash"),
-            ("gemini-2.5-flash-lite-preview-06-17", "Gemini 2.5 Flash Lite Preview 06-17", "Use Gemini 2.5 Flash Lite Preview 06-17"),
-            ("gemini-2.5-flash-preview-05-20", "Gemini 2.5 Flash Preview 05-20", "Use Gemini 2.5 Flash Preview 05-20"),
+            ("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite", "Use Gemini 2.5 Flash Lite"),
             ("gemini-2.0-flash", "Gemini 2.0 Flash", "Use Gemini 2.0 Flash"),
             ("gemini-2.0-flash-lite", "Gemini 2.0 Flash Lite", "Use Gemini 2.0 Flash Lite"),
         ],
@@ -61,7 +60,7 @@ def make_gemini_api_request(url, headers, data):
             return response.json()["candidates"][0]["content"]["parts"][0]["text"]
 
         except requests.exceptions.RequestException as e:
-            error_msg = f"API request failed (attempt {attempt+1}/{max_retries}): {str(e)}"
+            error_msg = f"API request failed (attempt {attempt + 1}/{max_retries}): {str(e)}"
             print(error_msg)
 
             if attempt < max_retries - 1:
