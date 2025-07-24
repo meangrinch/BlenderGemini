@@ -15,7 +15,8 @@ Blender can be controlled using program scripts written in Python. This plugin p
 
 1. In the 3D View, open the sidebar (press `N` if not visible) and locate the `Gemini Blender Assistant` tab
 2. Type a natural language command in the input field, e.g., "create a cube at the origin"
-3. Click the `Execute` button to generate and execute the Blender Python code
+3. (Optional) Select an object and enable "Include Selected Geometry" to provide the LLM with detailed information about the object's location, shape, etc.
+4. Click the `Execute` button to generate and execute the Blender Python code
 
 *Note: If the generated code produced an error, Gemini will automatically attempt to fix it (up to 1 time by default).*
 
