@@ -76,16 +76,16 @@ def make_gemini_api_request(url, headers, data):
             return None
 
 
-def get_scene_objects_as_text():
+def get_scene_objects_as_text(context):
     """
-    Scans the current Blender scene and returns a text summary of the objects.
+    Scans the current Blender scene and returns a text summary of the visible objects.
     This helps the AI understand the current state of the scene.
     """
-    objects = bpy.data.objects
+    objects = [obj for obj in context.scene.objects if obj.visible_get()]
     if not objects:
-        return "The scene is currently empty."
+        return "The current scene contains no visible objects."
 
-    scene_summary = "Current Scene Objects:\n"
+    scene_summary = "Visible Scene Objects:\n"
     for obj in objects:
         scene_summary += f"- Object Name: `{obj.name}`, Type: `{obj.type}`"
         if obj.type == "MESH":
@@ -144,7 +144,7 @@ def generate_blender_code(prompt, chat_history, context, system_prompt, detailed
         content = message.content if message.type == "user" else "```\n" + message.content + "\n```"
         contents.append({"role": role, "parts": [{"text": content}]})
 
-    scene_context = get_scene_objects_as_text()
+    scene_context = get_scene_objects_as_text(context)
     full_prompt = ""
     if detailed_geometry:
         full_prompt += "**Detailed Object Geometry:**\n" + detailed_geometry + "\n\n"
@@ -195,7 +195,7 @@ def fix_blender_code(original_code, error_message, context, system_prompt, detai
     url = "https://generativelanguage.googleapis.com/v1beta/models/" + context.scene.gemini_model + ":generateContent"
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
 
-    scene_context = get_scene_objects_as_text()
+    scene_context = get_scene_objects_as_text(context)
 
     detailed_geo_block = ""
     if detailed_geometry:
