@@ -23,7 +23,7 @@ bl_info = {
     "blender": (2, 82, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 3, 1),
+    "version": (1, 4, 0),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini.",
     "wiki_url": "",
@@ -62,9 +62,11 @@ You are `BlenderGemini`, a specialized AI assistant integrated directly into Ble
     -   **Parenting:** When parenting an object already in world space, you **must** set `child.matrix_parent_inverse = parent.matrix_world.inverted()` *before* assigning `child.parent = parent`.
     -   **Modeling vs. Polishing:** Distinguish between foundational geometry and final appearance. Apply visual polishing like `shade_smooth` only when adding geometric detail (e.g., with a Subdivision or Bevel modifier) or when the user's request implies a final visual touch-up (e.g., "make it look good," "finish it"). Do not apply it by default to simple primitives.
 
-4.  **Non-Destructive Workflow:** Strongly prefer non-destructive methods like Modifiers. Avoid entering Edit Mode unless absolutely necessary.
+4.  **Targeting with 3D Cursor:** If the 'Target with 3D Cursor' option is enabled (`bpy.context.scene.gemini_use_3d_cursor`), you **MUST** use the cursor's location (`bpy.context.scene.cursor.location`) as the center point for the operation (e.g., the lattice location). The user has manually placed it on the area of interest.
 
-5.  **Clarity and Selection:**
+5.  **Non-Destructive Workflow:** Strongly prefer non-destructive methods like Modifiers. Avoid entering Edit Mode unless absolutely necessary.
+
+6.  **Clarity and Selection:**
     -   Begin every script by ensuring Object Mode and deselecting all objects to guarantee a clean state.
     -   When using an operator, explicitly set the active object and selection state beforehand.
     -   Assign newly created objects to variables for easy reference.
@@ -233,6 +235,8 @@ class GEMINI_PT_Panel(bpy.types.Panel):
         row = column.row(align=True)
         row.prop(context.scene, "gemini_include_geometry", text="Include Selected Geometry")
         row = column.row(align=True)
+        row.prop(context.scene, "gemini_use_3d_cursor", text="Target with 3D Cursor")
+        row = column.row(align=True)
         row.operator("gemini.send_message", text=button_label)
         row.operator("gemini.clear_chat", text="Clear Chat")
 
@@ -253,12 +257,6 @@ class GEMINI_OT_Execute(bpy.types.Operator):
     bl_idname = "gemini.send_message"
     bl_label = "Send Message"
     bl_options = {"REGISTER", "UNDO"}
-
-    natural_language_input: bpy.props.StringProperty(
-        name="Command",
-        description="Enter the natural language command",
-        default="",
-    )
 
     def execute(self, context):
         api_key = get_api_key(context, __name__)
@@ -282,12 +280,15 @@ class GEMINI_OT_Execute(bpy.types.Operator):
             if active_obj:
                 detailed_geometry = get_detailed_object_data(active_obj)
 
+        use_3d_cursor = context.scene.gemini_use_3d_cursor
+
         blender_code = generate_blender_code(
             context.scene.gemini_chat_input,
             context.scene.gemini_chat_history,
             context,
             system_prompt,
             detailed_geometry=detailed_geometry,
+            use_3d_cursor=use_3d_cursor,
         )
 
         message = context.scene.gemini_chat_history.add()
@@ -335,7 +336,12 @@ class GEMINI_OT_Execute(bpy.types.Operator):
 
                 for attempt in range(1, max_fix_attempts + 1):
                     fixed_code = fix_blender_code(
-                        current_code, current_error, context, system_prompt, detailed_geometry=current_detailed_geometry
+                        current_code,
+                        current_error,
+                        context,
+                        system_prompt,
+                        detailed_geometry=current_detailed_geometry,
+                        use_3d_cursor=use_3d_cursor,
                     )
 
                     if not fixed_code:
@@ -453,17 +459,29 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
         layout.prop(self, "max_fix_attempts")
 
 
+classes = [
+    GEMINI_AddonPreferences,
+    GEMINI_OT_DeleteMessage,
+    GEMINI_OT_Execute,
+    GEMINI_PT_Panel,
+    GEMINI_OT_ClearChat,
+    GEMINI_OT_ShowCode,
+]
+
+
 def register():
-    bpy.utils.register_class(GEMINI_AddonPreferences)
-    bpy.utils.register_class(GEMINI_OT_DeleteMessage)
-    bpy.utils.register_class(GEMINI_OT_Execute)
-    bpy.utils.register_class(GEMINI_PT_Panel)
-    bpy.utils.register_class(GEMINI_OT_ClearChat)
-    bpy.utils.register_class(GEMINI_OT_ShowCode)
+    for cls in classes:
+        bpy.utils.register_class(cls)
 
     bpy.types.Scene.gemini_include_geometry = bpy.props.BoolProperty(
         name="Include Geometry",
         description="Include detailed geometry of the selected object in the request",
+        default=False,
+    )
+
+    bpy.types.Scene.gemini_use_3d_cursor = bpy.props.BoolProperty(
+        name="Target with 3D Cursor",
+        description="Use the 3D cursor's location as a target for operations",
         default=False,
     )
 
@@ -472,14 +490,11 @@ def register():
 
 
 def unregister():
-    bpy.utils.unregister_class(GEMINI_AddonPreferences)
-    bpy.utils.unregister_class(GEMINI_OT_DeleteMessage)
-    bpy.utils.unregister_class(GEMINI_OT_Execute)
-    bpy.utils.unregister_class(GEMINI_PT_Panel)
-    bpy.utils.unregister_class(GEMINI_OT_ClearChat)
-    bpy.utils.unregister_class(GEMINI_OT_ShowCode)
+    for cls in reversed(classes):
+        bpy.utils.unregister_class(cls)
 
     del bpy.types.Scene.gemini_include_geometry
+    del bpy.types.Scene.gemini_use_3d_cursor
     bpy.types.VIEW3D_MT_mesh_add.remove(menu_func)
     clear_props()
 

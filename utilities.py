@@ -129,7 +129,7 @@ def get_detailed_object_data(obj):
     return summary
 
 
-def generate_blender_code(prompt, chat_history, context, system_prompt, detailed_geometry=None):
+def generate_blender_code(prompt, chat_history, context, system_prompt, detailed_geometry=None, use_3d_cursor=False):
     api_key = get_api_key(context, "BlenderGemini")
 
     preferences = context.preferences
@@ -148,6 +148,10 @@ def generate_blender_code(prompt, chat_history, context, system_prompt, detailed
     full_prompt = ""
     if detailed_geometry:
         full_prompt += "**Detailed Object Geometry:**\n" + detailed_geometry + "\n\n"
+
+    if use_3d_cursor:
+        cursor_loc = context.scene.cursor.location
+        full_prompt += f"**3D Cursor Location:**\n({cursor_loc.x:.4f}, {cursor_loc.y:.4f}, {cursor_loc.z:.4f})\n\n"
 
     full_prompt += "**Scene Summary:**\n" + scene_context + "\n\nUser Request: " + prompt
 
@@ -185,7 +189,9 @@ def generate_blender_code(prompt, chat_history, context, system_prompt, detailed
     return None
 
 
-def fix_blender_code(original_code, error_message, context, system_prompt, detailed_geometry=None):
+def fix_blender_code(
+    original_code, error_message, context, system_prompt, detailed_geometry=None, use_3d_cursor=False
+):
     """Generate fixed Blender code based on the error message."""
     api_key = get_api_key(context, "BlenderGemini")
 
@@ -206,12 +212,21 @@ def fix_blender_code(original_code, error_message, context, system_prompt, detai
 ```
 """
 
+    cursor_block = ""
+    if use_3d_cursor:
+        cursor_loc = context.scene.cursor.location
+        cursor_block = f"""
+**[3D CURSOR LOCATION]:**
+({cursor_loc.x:.4f}, {cursor_loc.y:.4f}, {cursor_loc.z:.4f})
+"""
+
     fix_prompt = f"""**Persona:**
 You are a `bpy` Debugging Specialist. Your sole function is to analyze the provided faulty Python script and its corresponding error message, and then generate a corrected, fully functional version.
 
 **Task Context:**
 You will be given a script that failed, its error, and a scene summary. Use all of this information to provide a fix.
 {detailed_geo_block}
+{cursor_block}
 **[SCENE SUMMARY]:**
 ```
 {scene_context}
