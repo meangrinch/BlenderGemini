@@ -1,7 +1,8 @@
-import bpy
-import requests
 import re
 import time
+
+import bpy
+import requests
 
 
 def get_api_key(context, addon_name):
@@ -75,7 +76,60 @@ def make_gemini_api_request(url, headers, data):
             return None
 
 
-def generate_blender_code(prompt, chat_history, context, system_prompt):
+def get_scene_objects_as_text():
+    """
+    Scans the current Blender scene and returns a text summary of the objects.
+    This helps the AI understand the current state of the scene.
+    """
+    objects = bpy.data.objects
+    if not objects:
+        return "The scene is currently empty."
+
+    scene_summary = "Current Scene Objects:\n"
+    for obj in objects:
+        scene_summary += f"- Object Name: `{obj.name}`, Type: `{obj.type}`"
+        if obj.type == "MESH":
+            scene_summary += f", Vertices: {len(obj.data.vertices)}, Faces: {len(obj.data.polygons)}"
+        scene_summary += f", Location: {obj.location}\n"
+    return scene_summary
+
+
+def get_detailed_object_data(obj):
+    """
+    Serializes the geometry of a single Blender object into a detailed text format.
+    Includes a limit to avoid excessively long outputs for high-poly meshes.
+    """
+    if not obj or obj.type != "MESH":
+        return "No mesh object selected for detailed analysis."
+
+    data = obj.data
+    vertex_limit = 500
+    face_limit = 1000
+
+    summary = f"Detailed Geometry for Object: `{obj.name}`\n"
+    summary += "- Type: MESH\n"
+    summary += f"- Vertex count: {len(data.vertices)}\n"
+    summary += f"- Face count: {len(data.polygons)}\n"
+
+    if len(data.vertices) > vertex_limit or len(data.polygons) > face_limit:
+        summary += (
+            f"- NOTE: Geometry is too dense to display full details "
+            f"(limit: {vertex_limit} vertices, {face_limit} faces).\\n"
+        )
+        return summary
+
+    summary += "Vertices (x, y, z):\\n"
+    for v in data.vertices:
+        summary += f"  - ({v.co.x:.4f}, {v.co.y:.4f}, {v.co.z:.4f})\n"
+
+    summary += "Faces (vertex indices):\n"
+    for f in data.polygons:
+        summary += f"  - {list(f.vertices)}\n"
+
+    return summary
+
+
+def generate_blender_code(prompt, chat_history, context, system_prompt, detailed_geometry=None):
     api_key = get_api_key(context, "BlenderGemini")
 
     preferences = context.preferences
@@ -90,7 +144,14 @@ def generate_blender_code(prompt, chat_history, context, system_prompt):
         content = message.content if message.type == "user" else "```\n" + message.content + "\n```"
         contents.append({"role": role, "parts": [{"text": content}]})
 
-    contents.append({"role": "user", "parts": [{"text": prompt}]})
+    scene_context = get_scene_objects_as_text()
+    full_prompt = ""
+    if detailed_geometry:
+        full_prompt += "**Detailed Object Geometry:**\n" + detailed_geometry + "\n\n"
+
+    full_prompt += "**Scene Summary:**\n" + scene_context + "\n\nUser Request: " + prompt
+
+    contents.append({"role": "user", "parts": [{"text": full_prompt}]})
 
     safety_settings_config = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -124,7 +185,7 @@ def generate_blender_code(prompt, chat_history, context, system_prompt):
     return None
 
 
-def fix_blender_code(original_code, error_message, context, system_prompt):
+def fix_blender_code(original_code, error_message, context, system_prompt, detailed_geometry=None):
     """Generate fixed Blender code based on the error message."""
     api_key = get_api_key(context, "BlenderGemini")
 
@@ -134,11 +195,27 @@ def fix_blender_code(original_code, error_message, context, system_prompt):
     url = "https://generativelanguage.googleapis.com/v1beta/models/" + context.scene.gemini_model + ":generateContent"
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
 
+    scene_context = get_scene_objects_as_text()
+
+    detailed_geo_block = ""
+    if detailed_geometry:
+        detailed_geo_block = f"""
+**[DETAILED GEOMETRY OF SELECTED OBJECT]:**
+```
+{detailed_geometry}
+```
+"""
+
     fix_prompt = f"""**Persona:**
 You are a `bpy` Debugging Specialist. Your sole function is to analyze the provided faulty Python script and its corresponding error message, and then generate a corrected, fully functional version.
 
 **Task Context:**
-You will be given a script that failed during execution and the error traceback it produced.
+You will be given a script that failed, its error, and a scene summary. Use all of this information to provide a fix.
+{detailed_geo_block}
+**[SCENE SUMMARY]:**
+```
+{scene_context}
+```
 
 **[FAULTY SCRIPT]:**
 ```python

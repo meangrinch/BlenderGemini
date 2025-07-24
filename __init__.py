@@ -13,6 +13,7 @@ from .utilities import (
     fix_blender_code,
     generate_blender_code,
     get_api_key,
+    get_detailed_object_data,
     init_props,
     split_area_to_text_editor,
 )
@@ -22,7 +23,7 @@ bl_info = {
     "blender": (2, 82, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 2, 12),
+    "version": (1, 3, 0),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini.",
     "wiki_url": "",
@@ -34,8 +35,10 @@ You are `BlenderGemini`, a specialized AI assistant integrated directly into Ble
 
 **Context:**
 - You operate in a persistent, session-based environment.
+- You will be given a summary of the current Blender scene's objects. Use this to understand the existing context.
+- Optionally, you may also be given the detailed geometry (vertices and faces) of the currently selected object. Use this for high-precision edits.
 - The current state of the Blender scene is the cumulative result of all previously executed scripts in this conversation.
-- You have access to the full chat history to understand the current scene's state.
+- You have access to the full chat history to understand the flow of the user's project.
 
 **Core Directives:**
 1.  Your response **must** be a single, executable Python script formatted in a markdown code block.
@@ -44,10 +47,10 @@ You are `BlenderGemini`, a specialized AI assistant integrated directly into Ble
 
 **Code Generation Rules:**
 
-1.  **Scene Interaction Strategy:** Analyze the user's request against the full chat history to determine the correct action.
-    -   **A. Modification:** If the request refines existing objects, the script must modify those objects directly.
+1.  **Scene Interaction Strategy:** First, analyze the **[SCENE SUMMARY]** provided with the user's request. Then, analyze the user's request against the full chat history to determine the correct action.
+    -   **A. Modification:** If the request refines existing objects (which you can identify from the scene summary), the script must get a reference to those objects and modify them directly. Do not recreate them. If detailed geometry is provided, use it to inform your modifications.
     -   **B. Replacement:** If the request replaces objects from a previous step, the script must explicitly delete the old objects before creating the new ones.
-    -   **C. Addition:** If the request adds new objects, the script should create them without altering existing objects.
+    -   **C. Addition:** If the request adds new objects, the script should create them without altering existing objects unless specified.
 
 2.  **API Preference (Data over Ops):**
     -   Strongly prefer the direct Data API (`bpy.data`) for all property modifications (e.g., transforms, material values, modifier settings).
@@ -73,17 +76,25 @@ user: Create a red metallic sphere. Then, add a smaller green cube, give it slig
 assistant:
 ```python
 import bpy
+import bmesh
 
 # Core Directive: Ensure a clean state at the start of every script.
 if bpy.context.active_object and bpy.context.active_object.mode == 'EDIT':
     bpy.ops.object.mode_set(mode='OBJECT')
 bpy.ops.object.select_all(action='DESELECT')
 
-# --- Create Sphere ---
-bpy.ops.mesh.primitive_uv_sphere_add(radius=1, location=(0, 0, 0))
-sphere_obj = bpy.context.object
-# Rule: Assign descriptive names
-sphere_obj.name = "MetallicRedSphere"
+# --- Get references to existing objects if needed ---
+# Example: sphere_obj = bpy.data.objects.get("MetallicRedSphere")
+# If detailed geometry is provided for an object, you may need to enter edit mode
+# and use bmesh to perform precise modifications on its vertices/faces.
+
+# --- Create Sphere (if it doesn't exist) ---
+sphere_obj = bpy.data.objects.get("MetallicRedSphere")
+if not sphere_obj:
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=1, location=(0, 0, 0))
+    sphere_obj = bpy.context.object
+    # Rule: Assign descriptive names
+    sphere_obj.name = "MetallicRedSphere"
 
 # --- Create and Assign Sphere Material ---
 # Rule: Use Data API for properties
@@ -220,6 +231,8 @@ class GEMINI_PT_Panel(bpy.types.Panel):
         column.prop(context.scene, "gemini_chat_input", text="")
         button_label = "Please wait...(this might take some time)" if context.scene.gemini_button_pressed else "Execute"
         row = column.row(align=True)
+        row.prop(context.scene, "gemini_include_geometry", text="Include Selected Geometry")
+        row = column.row(align=True)
         row.operator("gemini.send_message", text=button_label)
         row.operator("gemini.clear_chat", text="Clear Chat")
 
@@ -263,8 +276,18 @@ class GEMINI_OT_Execute(bpy.types.Operator):
         context.scene.gemini_button_pressed = True
         bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
 
+        detailed_geometry = None
+        if context.scene.gemini_include_geometry:
+            active_obj = context.active_object
+            if active_obj:
+                detailed_geometry = get_detailed_object_data(active_obj)
+
         blender_code = generate_blender_code(
-            context.scene.gemini_chat_input, context.scene.gemini_chat_history, context, system_prompt
+            context.scene.gemini_chat_input,
+            context.scene.gemini_chat_history,
+            context,
+            system_prompt,
+            detailed_geometry=detailed_geometry,
         )
 
         message = context.scene.gemini_chat_history.add()
@@ -308,9 +331,12 @@ class GEMINI_OT_Execute(bpy.types.Operator):
 
                 current_code = blender_code
                 current_error = error_message
+                current_detailed_geometry = detailed_geometry
 
                 for attempt in range(1, max_fix_attempts + 1):
-                    fixed_code = fix_blender_code(current_code, current_error, context, system_prompt)
+                    fixed_code = fix_blender_code(
+                        current_code, current_error, context, system_prompt, detailed_geometry=current_detailed_geometry
+                    )
 
                     if not fixed_code:
                         self.report({"ERROR"}, f"Could not fix the code on attempt {attempt}: {current_error}")
@@ -435,6 +461,12 @@ def register():
     bpy.utils.register_class(GEMINI_OT_ClearChat)
     bpy.utils.register_class(GEMINI_OT_ShowCode)
 
+    bpy.types.Scene.gemini_include_geometry = bpy.props.BoolProperty(
+        name="Include Geometry",
+        description="Include detailed geometry of the selected object in the request",
+        default=False,
+    )
+
     bpy.types.VIEW3D_MT_mesh_add.append(menu_func)
     init_props()
 
@@ -447,6 +479,7 @@ def unregister():
     bpy.utils.unregister_class(GEMINI_OT_ClearChat)
     bpy.utils.unregister_class(GEMINI_OT_ShowCode)
 
+    del bpy.types.Scene.gemini_include_geometry
     bpy.types.VIEW3D_MT_mesh_add.remove(menu_func)
     clear_props()
 
