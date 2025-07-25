@@ -151,7 +151,10 @@ def generate_blender_code(prompt, chat_history, context, system_prompt, detailed
 
     if use_3d_cursor:
         cursor_loc = context.scene.cursor.location
-        full_prompt += f"**3D Cursor Location:**\n({cursor_loc.x:.4f}, {cursor_loc.y:.4f}, {cursor_loc.z:.4f})\n\n"
+        full_prompt += (
+            f"**3D Cursor Location (World Space):**\n"
+            f"({cursor_loc.x:.4f}, {cursor_loc.y:.4f}, {cursor_loc.z:.4f})\n\n"
+        )
 
     full_prompt += "**Scene Summary:**\n" + scene_context + "\n\nUser Request: " + prompt
 
@@ -216,14 +219,14 @@ def fix_blender_code(
     if use_3d_cursor:
         cursor_loc = context.scene.cursor.location
         cursor_block = f"""
-**[3D CURSOR LOCATION]:**
+**[3D CURSOR LOCATION (World Space)]:**
 ({cursor_loc.x:.4f}, {cursor_loc.y:.4f}, {cursor_loc.z:.4f})
 """
 
-    fix_prompt = f"""**Persona:**
+    fix_prompt = f"""## Persona
 You are a `bpy` Debugging Specialist. Your sole function is to analyze the provided faulty Python script and its corresponding error message, and then generate a corrected, fully functional version.
 
-**Task Context:**
+## Task Context
 You will be given a script that failed, its error, and a scene summary. Use all of this information to provide a fix.
 {detailed_geo_block}
 {cursor_block}
@@ -242,7 +245,7 @@ You will be given a script that failed, its error, and a scene summary. Use all 
 {error_message}
 ```
 
-**Core Directives for Correction:**
+## Core Directives for Correction
 
 1.  **Root Cause Analysis:** Your first step is to perform a root cause analysis. Meticulously trace the error from the `[ERROR TRACEBACK]` to the specific line and function call in the `[FAULTY SCRIPT]`. Understand *why* the error occurred (e.g., incorrect parameter, wrong object type, context issue).
 
@@ -251,13 +254,13 @@ You will be given a script that failed, its error, and a scene summary. Use all 
 3.  **Preserve Original Intent:** The corrected script **must** achieve the exact same outcome that the `[FAULTY SCRIPT]` was intended for. Do not remove or comment out functionality to bypass the error; fix the underlying issue.
 
 4.  **Maintain Coding Standards:** The fix must adhere to `bpy` best practices.
-    *   **API Preference:** Use the Data API (`bpy.data`) over the Operator API (`bpy.ops`) for property modifications.
-    *   **Parameter Integrity:** Ensure all function/operator parameters are valid and exist in the API. Do not invent arguments. This is a common source of errors.
+    -   **API Preference:** Use the Data API (`bpy.data`) over the Operator API (`bpy.ops`) for property modifications.
+    -   **Parameter Integrity:** Ensure all function/operator parameters are valid and exist in the API. Do not invent arguments. This is a common source of errors.
 
 5.  **Strict Output Mandate:**
-    *   Your response **MUST** be only the complete, corrected, and executable Python script.
-    *   Enclose the entire script in a single Python code block.
-    *   **DO NOT** include any conversational text, explanations, summaries of changes, or apologies. Your output will be executed directly."""  # noqa
+    -   Your response **MUST** be only the complete, corrected, and executable Python script.
+    -   Enclose the entire script in a single Python code block.
+    -   **DO NOT** include any conversational text, explanations, summaries of changes, or apologies. Your output will be executed directly."""  # noqa
 
     data = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},

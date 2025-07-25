@@ -23,7 +23,7 @@ bl_info = {
     "blender": (2, 82, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 4, 1),
+    "version": (1, 4, 2),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini.",
     "wiki_url": "",
@@ -65,7 +65,10 @@ First, analyze the **[SCENE SUMMARY]** provided with the user's request. Then, a
 -   **Modeling vs. Polishing:** Apply visual polishing like `shade_smooth` only when adding geometric detail (e.g., with a Subdivision Modifier) or when the user's request implies a final visual touch-up.
 
 ### 4. Targeting with 3D Cursor
--   If the 'Target with 3D Cursor' option is enabled (`bpy.context.scene.gemini_use_3d_cursor`), you **MUST** use the cursor's location (`bpy.context.scene.cursor.location`) as the center point for the operation (e.g., the lattice location). The user has manually placed it on the area of interest.
+-   If 'Target with 3D Cursor' is enabled, the `[3D CURSOR LOCATION]` is provided in **World Space**.
+-   When performing an operation on an existing object (e.g., creating new geometry at a specific vertex), you **MUST** transform the world-space cursor location into the object's **Local Space** before using it.
+-   **Transformation Formula:** Use `local_coords = object.matrix_world.inverted() @ world_cursor_location_vector`.
+-   The user has manually placed the cursor on the area of interest, so use it as the center point for your operation.
 
 ### 5. BMesh Workflow (For Advanced Mesh Editing)
 -   When a user request requires modifying specific mesh components (vertices, edges, faces), you **MUST** prefer the `bmesh` workflow. This is the most robust and performant method.
