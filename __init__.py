@@ -23,7 +23,7 @@ bl_info = {
     "blender": (2, 82, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 4, 2),
+    "version": (1, 4, 3),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini.",
     "wiki_url": "",
@@ -70,9 +70,11 @@ First, analyze the **[SCENE SUMMARY]** provided with the user's request. Then, a
 -   **Transformation Formula:** Use `local_coords = object.matrix_world.inverted() @ world_cursor_location_vector`.
 -   The user has manually placed the cursor on the area of interest, so use it as the center point for your operation.
 
-### 5. BMesh Workflow (For Advanced Mesh Editing)
--   When a user request requires modifying specific mesh components (vertices, edges, faces), you **MUST** prefer the `bmesh` workflow. This is the most robust and performant method.
+### 5. BMesh Workflows for Edit Mode Operations
+When a user request requires modifying specific mesh components (vertices, edges, faces), you **MUST** use an Edit Mode workflow. There are two primary patterns.
 
+#### **Pattern A: Pure BMesh Operation**
+-   **Use Case:** When the entire operation can be handled by the `bmesh.ops` module (e.g., bevel, extrude, inset). This is the most robust and performant method.
 -   **Correct Pattern:**
     1.  Enter Edit Mode.
     2.  Create a `bmesh` instance: `bm = bmesh.from_edit_mesh(obj.data)`.
@@ -80,8 +82,24 @@ First, analyze the **[SCENE SUMMARY]** provided with the user's request. Then, a
     4.  Use the `bmesh.ops` module to perform the operation (e.g., `bmesh.ops.bevel(bm, geom=...)`).
     5.  Commit the changes back to the mesh: `bmesh.update_edit_mesh(obj.data)`.
     6.  Free the `bmesh` instance: `bm.free()`.
+    7.  Return to Object Mode.
 
--   **Anti-Pattern to Avoid:** Do **NOT** mix `bmesh` selection with `bpy.ops` operators. For example, do not select a vertex in `bmesh` and then call `bpy.ops.mesh.bevel()`. This will lead to unpredictable context errors. If you start an operation in `bmesh`, finish it with `bmesh.ops`.
+#### **Pattern B: Hybrid Workflow (`bmesh` for Selection, `bpy.ops` for Operation)**
+-   **Use Case:** When you need the precision of `bmesh` to *find* and *select* geometry, but the required modification is only available as a `bpy.ops` operator (e.g., `bpy.ops.transform.shrink_fatten`, `bpy.ops.mesh.knife_project`).
+-   **Correct Pattern:**
+    1.  Enter Edit Mode.
+    2.  Create a `bmesh` instance: `bm = bmesh.from_edit_mesh(obj.data)`.
+    3.  Perform all finding and selection logic within the `bmesh` data structure.
+    4.  **CRITICAL:** Commit the selection and immediately release the `bmesh` instance to unlock the context for `bpy.ops`:
+        ```python
+        bmesh.update_edit_mesh(obj.data)
+        bm.free()
+        ```
+    5.  Now, with `bmesh` closed, call the desired `bpy.ops` operator. It will now correctly see the selection you made.
+    6.  Return to Object Mode.
+
+#### **Anti-Pattern to Avoid**
+-   Do **NOT** have an active `bmesh` instance (`bm`) when you call a `bpy.ops` operator. For example, do not select a vertex in `bmesh`, keep `bm` active, and then call `bpy.ops.mesh.bevel()`. This will lead to context errors or the operator doing nothing, as the context is locked by `bmesh`. If you start with `bmesh`, you must either finish with `bmesh.ops` (Pattern A) or `free()` it before using `bpy.ops` (Pattern B).
 
 ---
 ## Example
