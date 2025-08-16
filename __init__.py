@@ -23,7 +23,6 @@ from .utilities import (  # noqa: E402
     project_point_to_surface_near,
     ensure_subsurf_for_local_detail,
     get_local_geometry_patch_text,
-    apply_six_pack,
 )
 
 bl_info = {
@@ -66,7 +65,6 @@ def _make_namespace(context):
         "project_point_to_surface_near": project_point_to_surface_near,
         "ensure_subsurf_for_local_detail": ensure_subsurf_for_local_detail,
         "get_local_geometry_patch_text": get_local_geometry_patch_text,
-        "apply_six_pack": apply_six_pack,
     }
 
 

@@ -699,127 +699,6 @@ def get_local_geometry_patch_text(obj, center_world, radius, vertex_limit=2000, 
         return "Local geometry patch unavailable due to an error."
 
 
-def apply_six_pack(
-    context,
-    obj=None,
-    cursor_world=None,
-    row_spacing=None,
-    col_spacing=None,
-    radius=None,
-    ridge_strength=None,
-    valley_strength=None,
-    falloff="GAUSSIAN",
-    add_detail=True,
-):
-    """
-    Stamp a stylized abdominal six-pack near the 3D cursor.
-    Heuristically determines spacing, radius, and strengths from the object's size.
-
-    Returns True on success, False otherwise.
-    """
-    try:
-        if obj is None:
-            obj, _reason, _dist = _choose_cursor_target_object(context)
-        if obj is None or obj.type != 'MESH':
-            return False
-
-        cursor = context.scene.cursor
-        if cursor_world is None:
-            cursor_world = cursor.location.copy()
-        basis = cursor.matrix.copy().to_3x3()
-        right = (basis @ mathutils.Vector((1.0, 0.0, 0.0))).normalized()
-        up = (basis @ mathutils.Vector((0.0, 1.0, 0.0))).normalized()
-
-        # Heuristic sizing from world AABB
-        _size, diag = _world_bbox_stats(obj)
-        diag = max(diag, 1e-3)
-        default_radius = max(0.02, min(0.08, 0.05 * diag))
-        default_row = 1.4 * default_radius
-        default_col = 1.6 * default_radius
-        default_ridge = -0.75 * default_radius
-        default_valley = +0.35 * default_radius
-
-        radius = float(radius) if radius is not None else default_radius
-        row_spacing = float(row_spacing) if row_spacing is not None else default_row
-        col_spacing = float(col_spacing) if col_spacing is not None else default_col
-        ridge_strength = float(ridge_strength) if ridge_strength is not None else default_ridge
-        valley_strength = float(valley_strength) if valley_strength is not None else default_valley
-
-        if add_detail:
-            ensure_subsurf_for_local_detail(obj, target_levels=2)
-
-        # Compute six centers (3 rows x 2 cols) around cursor
-        centers_guess = []
-        for row_k in (-row_spacing, 0.0, row_spacing):
-            # left and right columns
-            centers_guess.append(cursor_world + up * row_k - right * (0.5 * col_spacing))
-            centers_guess.append(cursor_world + up * row_k + right * (0.5 * col_spacing))
-
-        # Project centers to the mesh surface
-        surface_centers = []
-        for g in centers_guess:
-            hit, n = project_point_to_surface_near(obj, g)
-            if hit is None:
-                # fall back to guess point
-                hit = g
-                n = up
-            surface_centers.append((hit, n))
-
-        # Apply ridges (fatten outward)
-        for hit, _n in surface_centers:
-            local_center = obj.matrix_world.inverted() @ hit
-            apply_radial_shrink_fatten(
-                obj,
-                local_center,
-                radius,
-                ridge_strength,
-                falloff=falloff,
-                mirror=False,
-            )
-
-        # Apply vertical valleys between rows at the midline
-        midline_points = [cursor_world + up * k for k in (-row_spacing, 0.0, row_spacing)]
-        for p in midline_points:
-            hit, _n = project_point_to_surface_near(obj, p)
-            if hit is None:
-                hit = p
-            local_center = obj.matrix_world.inverted() @ hit
-            apply_radial_shrink_fatten(
-                obj,
-                local_center,
-                radius * 0.6,
-                valley_strength,
-                falloff=falloff,
-                mirror=False,
-            )
-
-        # Light separation between left/right columns along three rows
-        row_points = [cursor_world + up * k for k in (-row_spacing, 0.0, row_spacing)]
-        for rp in row_points:
-            # place a small valley at the center between left and right
-            hit, _n = project_point_to_surface_near(obj, rp)
-            if hit is None:
-                hit = rp
-            local_center = obj.matrix_world.inverted() @ hit
-            apply_radial_shrink_fatten(
-                obj,
-                local_center,
-                radius * 0.45,
-                valley_strength * 0.8,
-                falloff=falloff,
-                mirror=False,
-            )
-
-        # Update the mesh after modifications
-        try:
-            obj.data.update()
-        except Exception:
-            pass
-        return True
-    except Exception:
-        return False
-
-
 def apply_radial_shrink_fatten(
     obj,
     center_local,
@@ -949,9 +828,7 @@ def generate_blender_code(
             "- ensure_subsurf_for_local_detail(obj, target_levels=2)\n"
             "- get_local_geometry_patch_text(obj, center_world, radius,\n"
             "  vertex_limit=2000, face_limit=4000)\n"
-            "- apply_six_pack(context, obj=None, cursor_world=None, row_spacing=None,\n"
-            "  col_spacing=None, radius=None, ridge_strength=None, valley_strength=None,\n"
-            "  falloff=\"GAUSSIAN\", add_detail=True)\n\n"
+            "\n"
         )
         full_prompt += "\n"
 
@@ -1077,8 +954,6 @@ def fix_blender_code(
             "- ensure_subsurf_for_local_detail(obj, target_levels=2)\n"
             "- get_local_geometry_patch_text(obj, center_world, radius, vertex_limit=2000,\n"
             "  face_limit=4000)\n"
-            "- apply_six_pack(context, obj=None, cursor_world=None, row_spacing=None, col_spacing=None,\n"
-            "  radius=None, ridge_strength=None, valley_strength=None, falloff=\"GAUSSIAN\", add_detail=True)\n"
         )
 
     screenshot_block = ""
