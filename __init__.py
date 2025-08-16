@@ -8,14 +8,22 @@ libs_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")
 if libs_path not in sys.path:
     sys.path.append(libs_path)
 
-from .utilities import (
+from .utilities import (  # noqa: E402
     clear_props,
     fix_blender_code,
     generate_blender_code,
     get_api_key,
     get_detailed_object_data,
+    get_vertices_in_radius,
+    get_vertices_in_geodesic_radius,
     init_props,
+    apply_radial_shrink_fatten,
     split_area_to_text_editor,
+    raycast_surface,
+    project_point_to_surface_near,
+    ensure_subsurf_for_local_detail,
+    get_local_geometry_patch_text,
+    apply_six_pack,
 )
 
 bl_info = {
@@ -23,57 +31,108 @@ bl_info = {
     "blender": (2, 82, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 4, 3),
+    "version": (1, 5, 0),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini.",
     "wiki_url": "",
     "tracker_url": "",
 }
 
-system_prompt = """## Persona
+
+def _ensure_object_mode():
+    """Best-effort switch to Object Mode to avoid dangling BMesh contexts."""
+    try:
+        # bpy.context.mode is e.g. 'OBJECT', 'EDIT_MESH', etc.
+        if getattr(bpy.context, "mode", "OBJECT") != 'OBJECT':
+            try:
+                bpy.ops.object.mode_set(mode='OBJECT')
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _make_namespace(context):
+    """Create a fresh namespace for script execution to avoid stale references."""
+    return {
+        "bpy": bpy,
+        "context": context,
+        "__name__": "__main__",
+        # Expose helpers so generated code can call them directly
+        "apply_radial_shrink_fatten": apply_radial_shrink_fatten,
+        "get_vertices_in_radius": get_vertices_in_radius,
+        "get_vertices_in_geodesic_radius": get_vertices_in_geodesic_radius,
+        "raycast_surface": raycast_surface,
+        "project_point_to_surface_near": project_point_to_surface_near,
+        "ensure_subsurf_for_local_detail": ensure_subsurf_for_local_detail,
+        "get_local_geometry_patch_text": get_local_geometry_patch_text,
+        "apply_six_pack": apply_six_pack,
+    }
+
+
+system_prompt = """### Persona
 You are `BlenderGemini`, a specialized AI assistant integrated directly into Blender's scripting environment. Your sole purpose is to translate user requests into clean, efficient, and robust `bpy` Python scripts.
 
-## Context
+### Context
 - You operate in a persistent, session-based environment.
 - You will be given a summary of the current Blender scene's objects. Use this to understand the existing context.
 - Optionally, you may also be given the detailed geometry (vertices and faces) of the currently selected object. Use this for high-precision edits.
+- Optionally, a screenshot of the 3D Viewport may be attached; use it to understand selection state, viewport orientation, and visible context. Do not rely on it for precise coordinates.
 - The current state of the Blender scene is the cumulative result of all previously executed scripts in this conversation.
 - You have access to the full chat history to understand the flow of the user's project.
 
-## Core Directives
+### Core Directives
 1.  Your response **must** be a single, executable Python script formatted in a markdown code block.
 2.  Do **not** include any explanatory text, apologies, or conversation outside of the code block. Your output is fed directly to a Python interpreter.
 3.  The script must be self-contained and runnable, starting with `import bpy`.
 
-## Code Generation Rules
+### Code Generation Rules
 
-### 1. Scene Interaction Strategy
+#### 1. Scene Interaction Strategy
 First, analyze the **[SCENE SUMMARY]** provided with the user's request. Then, analyze the user's request against the full chat history to determine the correct action.
 -   **A. Modification:** If the request refines existing objects, the script must get a reference to those objects and modify them directly. **DO NOT** recreate them.
 -   **B. Replacement:** If the request replaces objects from a previous step, the script must explicitly delete the old objects before creating the new ones.
 -   **C. Addition:** If the request adds new objects, the script should create them without altering existing objects unless specified.
 
-### 2. API & Workflow Principles
+#### 2. API & Workflow Principles
 -   **API Preference (Data over Ops):** Prefer the direct Data API (`bpy.data`) for all property modifications. Use the Operator API (`bpy.ops`) primarily for object creation, mode switching, and operations with no direct data equivalent.
 -   **Non-Destructive Workflow:** Prefer non-destructive methods like Modifiers. Avoid entering Edit Mode unless absolutely necessary.
 -   **Clarity and Selection:** Begin every script by ensuring Object Mode and deselecting all objects. When using an operator, explicitly set the active object and selection state beforehand. Assign newly created objects to variables.
 
-### 3. Specific API Nuances
+#### 3. Specific API Nuances
 -   **Naming:** Assign descriptive names to all new objects and materials.
 -   **Material Specular:** For the Principled BSDF node, control dielectric specular reflection using the `IOR` and `Specular IOR Level` inputs.
 -   **Parenting:** When parenting an object already in world space, you **MUST** set `child.matrix_parent_inverse = parent.matrix_world.inverted()` *before* assigning `child.parent = parent`.
 -   **Modeling vs. Polishing:** Apply visual polishing like `shade_smooth` only when adding geometric detail (e.g., with a Subdivision Modifier) or when the user's request implies a final visual touch-up.
 
-### 4. Targeting with 3D Cursor
--   If 'Target with 3D Cursor' is enabled, the `[3D CURSOR LOCATION]` is provided in **World Space**.
--   When performing an operation on an existing object (e.g., creating new geometry at a specific vertex), you **MUST** transform the world-space cursor location into the object's **Local Space** before using it.
--   **Transformation Formula:** Use `local_coords = object.matrix_world.inverted() @ world_cursor_location_vector`.
--   The user has manually placed the cursor on the area of interest, so use it as the center point for your operation.
+#### 4. Targeting with 3D Cursor
+-   If 'Target with 3D Cursor' is enabled, the add-on provides the 3D cursor's location and orientation in **World Space**.
+-   Treat the cursor as a read-only target indicator; do not move it unless explicitly requested.
+-   When acting on an existing object, transform the world-space cursor location into the object's **Local Space** before use.
+    -   Use: `local_coords = obj.matrix_world.inverted() @ world_cursor_location_vector`
+-   For orientation-aware tasks (e.g., aligning a new object, orienting a cut/array):
+    -   Use the cursor's basis vectors from `cursor.matrix.to_3x3()` as local axes.
+    -   Example axes: `right = basis @ Vector((1,0,0))`, `up = basis @ Vector((0,1,0))`, `forward = basis @ Vector((0,0,1))`.
+-   Ambiguity resolution near the cursor:
+    -   If a specific object isn't named, prefer the currently selected object nearest to the cursor.
+    -   If nothing is selected, prefer the nearest visible MESH object to the cursor.
+-   When adding new geometry and no location is specified, place/center it at the cursor location by default and align to the cursor orientation when appropriate.
 
-### 5. BMesh Workflows for Edit Mode Operations
+#### 5. Localized Organic Edits Near the Cursor
+-   If the user requests organic shaping near the cursor (e.g., making a calf more realistic), use the cursor-local coordinates and the Scene-provided controls:
+    -   `context.scene.gemini_edit_radius` (meters)
+    -   `context.scene.gemini_edit_strength` (positive shrinks, negative fattens)
+    -   `context.scene.gemini_falloff` ("SMOOTH" | "LINEAR")
+    -   `context.scene.gemini_mirror_edit` (bool) with `context.scene.gemini_mirror_axis` ("X"|"Y"|"Z")
+-   Prefer the following helpers for precise, robust edits:
+    -   `apply_radial_shrink_fatten(obj, center_local, radius, strength, falloff="SMOOTH", mirror=False, mirror_axis="X")`
+    -   `get_vertices_in_radius(obj, center_local, radius)`
+-   Compute `center_local` via: `local = obj.matrix_world.inverted() @ context.scene.cursor.location`
+
+#### 6. BMesh Workflows for Edit Mode Operations
 When a user request requires modifying specific mesh components (vertices, edges, faces), you **MUST** use an Edit Mode workflow. There are two primary patterns.
 
-#### **Pattern A: Pure BMesh Operation**
+##### **Pattern A: Pure BMesh Operation**
 -   **Use Case:** When the entire operation can be handled by the `bmesh.ops` module (e.g., bevel, extrude, inset). This is the most robust and performant method.
 -   **Correct Pattern:**
     1.  Enter Edit Mode.
@@ -84,7 +143,7 @@ When a user request requires modifying specific mesh components (vertices, edges
     6.  Free the `bmesh` instance: `bm.free()`.
     7.  Return to Object Mode.
 
-#### **Pattern B: Hybrid Workflow (`bmesh` for Selection, `bpy.ops` for Operation)**
+##### **Pattern B: Hybrid Workflow (`bmesh` for Selection, `bpy.ops` for Operation)**
 -   **Use Case:** When you need the precision of `bmesh` to *find* and *select* geometry, but the required modification is only available as a `bpy.ops` operator (e.g., `bpy.ops.transform.shrink_fatten`, `bpy.ops.mesh.knife_project`).
 -   **Correct Pattern:**
     1.  Enter Edit Mode.
@@ -98,11 +157,11 @@ When a user request requires modifying specific mesh components (vertices, edges
     5.  Now, with `bmesh` closed, call the desired `bpy.ops` operator. It will now correctly see the selection you made.
     6.  Return to Object Mode.
 
-#### **Anti-Pattern to Avoid**
+##### **Anti-Pattern to Avoid**
 -   Do **NOT** have an active `bmesh` instance (`bm`) when you call a `bpy.ops` operator. For example, do not select a vertex in `bmesh`, keep `bm` active, and then call `bpy.ops.mesh.bevel()`. This will lead to context errors or the operator doing nothing, as the context is locked by `bmesh`. If you start with `bmesh`, you must either finish with `bmesh.ops` (Pattern A) or `free()` it before using `bpy.ops` (Pattern B).
 
 ---
-## Example
+### Example
 
 <user_request>
 Create a red metallic sphere. Then, add a smaller green cube, give it slightly rounded edges, and parent it to the sphere, positioned 2 units directly above the sphere's center.
@@ -264,10 +323,19 @@ class GEMINI_PT_Panel(bpy.types.Panel):
         column.label(text="Enter your message:")
         column.prop(context.scene, "gemini_chat_input", text="")
         button_label = "Please wait...(this might take some time)" if context.scene.gemini_button_pressed else "Execute"
+        # Minimal toggles retained per user request
         row = column.row(align=True)
         row.prop(context.scene, "gemini_include_geometry", text="Include Selected Geometry")
         row = column.row(align=True)
         row.prop(context.scene, "gemini_use_3d_cursor", text="Target with 3D Cursor")
+        if context.scene.gemini_use_3d_cursor:
+            cursor = context.scene.cursor
+            box = column.box()
+            box.label(text=f"Location: ({cursor.location.x:.4f}, {cursor.location.y:.4f}, {cursor.location.z:.4f})")
+        row = column.row(align=True)
+        row.prop(context.scene, "gemini_include_viewport_screenshot", text="Attach Viewport Screenshot")
+        row = column.row(align=True)
+        row.prop(context.scene, "gemini_enable_grounding", text="Enable Grounding")
         row = column.row(align=True)
         row.operator("gemini.send_message", text=button_label)
         row.operator("gemini.clear_chat", text="Clear Chat")
@@ -306,12 +374,12 @@ class GEMINI_OT_Execute(bpy.types.Operator):
         context.scene.gemini_button_pressed = True
         bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
 
+        # Respect user toggles for geometry inclusion and 3D cursor targeting
         detailed_geometry = None
         if context.scene.gemini_include_geometry:
             active_obj = context.active_object
             if active_obj:
                 detailed_geometry = get_detailed_object_data(active_obj)
-
         use_3d_cursor = context.scene.gemini_use_3d_cursor
 
         blender_code = generate_blender_code(
@@ -321,6 +389,7 @@ class GEMINI_OT_Execute(bpy.types.Operator):
             system_prompt,
             detailed_geometry=detailed_geometry,
             use_3d_cursor=use_3d_cursor,
+            include_viewport_screenshot=context.scene.gemini_include_viewport_screenshot,
         )
 
         message = context.scene.gemini_chat_history.add()
@@ -338,7 +407,9 @@ class GEMINI_OT_Execute(bpy.types.Operator):
             message.type = "assistant"
             message.content = blender_code
 
-            namespace = {"bpy": bpy, "context": context, "__name__": "__main__"}
+            # Ensure a neutral mode before executing arbitrary code
+            _ensure_object_mode()
+            namespace = _make_namespace(context)
 
             try:
                 exec(blender_code, namespace)
@@ -356,6 +427,8 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                 objects_after = set(bpy.data.objects)
                 materials_after = set(bpy.data.materials)
 
+                # Ensure we're not in Edit Mode before cleanup
+                _ensure_object_mode()
                 for obj in objects_after - objects_before:
                     bpy.data.objects.remove(obj, do_unlink=True)
 
@@ -374,6 +447,7 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                         system_prompt,
                         detailed_geometry=current_detailed_geometry,
                         use_3d_cursor=use_3d_cursor,
+                        include_viewport_screenshot=context.scene.gemini_include_viewport_screenshot,
                     )
 
                     if not fixed_code:
@@ -387,6 +461,8 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                     message.content = fixed_code
 
                     try:
+                        _ensure_object_mode()
+                        namespace = _make_namespace(context)
                         exec(fixed_code, namespace)
                         self.report({"INFO"}, f"Code fixed and executed successfully on attempt {attempt}!")
                         break
@@ -394,16 +470,17 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                         current_error = f"Error executing fixed code: {str(e2)}"
 
                         if attempt < max_fix_attempts:
-                            self.report(
-                                {"WARNING"},
-                                f"Fix attempt {attempt} had an error. Attempting to fix again ({attempt + 1}/{max_fix_attempts})...",
-                            )
+                            self.report({"WARNING"}, (
+                                f"Fix attempt {attempt} had an error. Attempting to fix again "
+                                f"({attempt + 1}/{max_fix_attempts})..."
+                            ))
 
                             context.scene.gemini_chat_history.remove(fix_history_index)
 
                             objects_after_fix = set(bpy.data.objects)
                             materials_after_fix = set(bpy.data.materials)
 
+                            _ensure_object_mode()
                             for obj in objects_after_fix - objects_before:
                                 bpy.data.objects.remove(obj, do_unlink=True)
 
@@ -420,6 +497,8 @@ class GEMINI_OT_Execute(bpy.types.Operator):
             context.scene.gemini_button_pressed = False
             return {"CANCELLED"}
 
+        # Always return to Object Mode at the end to keep viewport/draw stable
+        _ensure_object_mode()
         context.scene.gemini_button_pressed = False
         return {"FINISHED"}
 
@@ -513,7 +592,13 @@ def register():
 
     bpy.types.Scene.gemini_use_3d_cursor = bpy.props.BoolProperty(
         name="Target with 3D Cursor",
-        description="Use the 3D cursor's location as a target for operations",
+        description="Use the 3D cursor's location and orientation as a target for operations",
+        default=False,
+    )
+
+    bpy.types.Scene.gemini_include_viewport_screenshot = bpy.props.BoolProperty(
+        name="Attach Viewport Screenshot",
+        description="Send a screenshot of the 3D Viewport with your request",
         default=False,
     )
 
@@ -527,6 +612,7 @@ def unregister():
 
     del bpy.types.Scene.gemini_include_geometry
     del bpy.types.Scene.gemini_use_3d_cursor
+    del bpy.types.Scene.gemini_include_viewport_screenshot
     bpy.types.VIEW3D_MT_mesh_add.remove(menu_func)
     clear_props()
 
