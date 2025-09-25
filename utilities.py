@@ -58,7 +58,9 @@ def init_props():
         description="Select the Gemini model to use",
         items=[
             ("gemini-2.5-pro", "Gemini 2.5 Pro", "Use Gemini 2.5 Pro"),
+            ("gemini-2.5-flash-preview-09-2025", "Gemini 2.5 Flash Preview 09-2025", "Use Gemini 2.5 Flash Preview 09-2025"),
             ("gemini-2.5-flash", "Gemini 2.5 Flash", "Use Gemini 2.5 Flash"),
+            ("gemini-2.5-flash-lite-preview-09-2025", "Gemini 2.5 Flash Lite Preview 09-2025", "Use Gemini 2.5 Flash Lite Preview 09-2025"),
             ("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite", "Use Gemini 2.5 Flash Lite"),
             ("gemini-2.0-flash", "Gemini 2.0 Flash", "Use Gemini 2.0 Flash"),
             ("gemini-2.0-flash-lite", "Gemini 2.0 Flash Lite", "Use Gemini 2.0 Flash Lite"),
