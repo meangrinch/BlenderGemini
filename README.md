@@ -15,11 +15,11 @@ Blender can be controlled using program scripts written in Python. This plugin p
 
 1. In the 3D View, open the sidebar (press `N` if not visible) and locate the `Gemini Blender Assistant` tab.
 2. Type a natural language command in the input field, e.g., "create a cube at the origin".
-3. (Optional) Select an object and enable "Include Selected Geometry" to provide the LLM with detailed information about the object's location, shape, etc.
-4. (Optional) Enable "Target with 3D Cursor" to guide actions near the 3D cursor. The add-on will send the cursor's world location, orientation, and nearest objects to improve targeting and alignment.
+3. Select an object and enable "Include Selected Geometry" to provide the LLM with detailed information about the object's location, shape, etc.
+4. Enable "Target with 3D Cursor" to guide actions near the 3D cursor. The add-on will send the cursor's world location, orientation, and nearest objects to improve targeting and alignment.
    - Tip: Place the cursor on or near the area of interest (Shift+Right-Click by default). For orientation-aware tasks (arrays, cuts, alignment), rotate the cursor to define axes.
-5. (Optional) Enable "Attach Viewport Screenshot" to include a 3D Viewport image for additional visual context.
-6. (Optional) Enable "Enable Grounding" to allow Gemini to use Google Search grounding for more verifiable, up-to-date responses.
+5. Enable "Attach Viewport Screenshot" to include a 3D Viewport image for additional visual context.
+6. Enable "Enable Grounding" to allow Gemini to use Google Search grounding for more verifiable, up-to-date responses.
 7. Click the `Execute` button to generate and execute the Blender Python code.
 
 *Note: Gemini will automatically attempt to fix error-producing scripts (up to 1 time by default).*
