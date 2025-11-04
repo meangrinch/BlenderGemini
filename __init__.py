@@ -27,10 +27,10 @@ from .utilities import (  # noqa: E402
 
 bl_info = {
     "name": "Gemini Blender Assistant",
-    "blender": (2, 82, 0),
+    "blender": (3, 1, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 5, 1),
+    "version": (1, 6, 0),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini.",
     "wiki_url": "",
@@ -42,9 +42,9 @@ def _ensure_object_mode():
     """Best-effort switch to Object Mode to avoid dangling BMesh contexts."""
     try:
         # bpy.context.mode is e.g. 'OBJECT', 'EDIT_MESH', etc.
-        if getattr(bpy.context, "mode", "OBJECT") != 'OBJECT':
+        if getattr(bpy.context, "mode", "OBJECT") != "OBJECT":
             try:
-                bpy.ops.object.mode_set(mode='OBJECT')
+                bpy.ops.object.mode_set(mode="OBJECT")
             except Exception:
                 pass
     except Exception:
@@ -282,6 +282,76 @@ class GEMINI_OT_ShowCode(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class GEMINI_OT_CopyGeometry(bpy.types.Operator):
+    bl_idname = "gemini.copy_geometry"
+    bl_label = "Copy Geometry"
+    bl_description = "Copy detailed geometry data of selected object to clipboard"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return (
+            context.active_object is not None and context.active_object.type == "MESH"
+        )
+
+    def execute(self, context):
+        active_obj = context.active_object
+        if not active_obj:
+            self.report({"ERROR"}, "No object selected")
+            return {"CANCELLED"}
+
+        if active_obj.type != "MESH":
+            self.report({"ERROR"}, "Selected object is not a mesh")
+            return {"CANCELLED"}
+
+        try:
+            geometry_text = get_detailed_object_data(active_obj)
+            if geometry_text:
+                context.window_manager.clipboard = geometry_text
+                self.report(
+                    {"INFO"},
+                    f"Geometry data copied to clipboard ({len(geometry_text)} characters)",
+                )
+                return {"FINISHED"}
+            else:
+                self.report({"ERROR"}, "No geometry data available")
+                return {"CANCELLED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Failed to copy geometry: {str(e)}")
+            return {"CANCELLED"}
+
+
+class GEMINI_OT_CopyCursor(bpy.types.Operator):
+    bl_idname = "gemini.copy_cursor"
+    bl_label = "Copy Cursor"
+    bl_description = "Copy 3D cursor location and orientation data to clipboard"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        try:
+            from .utilities import (
+                _build_complete_cursor_json,
+                _format_cursor_json_compact,
+            )
+
+            cursor_json = _build_complete_cursor_json(context)
+            cursor_json_str = _format_cursor_json_compact(cursor_json)
+
+            if cursor_json_str:
+                context.window_manager.clipboard = cursor_json_str
+                self.report(
+                    {"INFO"},
+                    f"Cursor data copied to clipboard ({len(cursor_json_str)} characters)",
+                )
+                return {"FINISHED"}
+            else:
+                self.report({"ERROR"}, "No cursor data available")
+                return {"CANCELLED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Failed to copy cursor data: {str(e)}")
+            return {"CANCELLED"}
+
+
 class GEMINI_PT_Panel(bpy.types.Panel):
     bl_label = "Gemini Blender Assistant"
     bl_idname = "GEMINI_PT_Panel"
@@ -301,12 +371,16 @@ class GEMINI_PT_Panel(bpy.types.Panel):
                 row.label(text="Assistant: ")
                 show_code_op = row.operator("gemini.show_code", text="Show Code")
                 show_code_op.code = message.content
-                delete_message_op = row.operator("gemini.delete_message", text="", icon="TRASH", emboss=False)
+                delete_message_op = row.operator(
+                    "gemini.delete_message", text="", icon="TRASH", emboss=False
+                )
                 delete_message_op.message_index = index
             else:
                 row = box.row()
                 row.label(text=f"User: {message.content}")
-                delete_message_op = row.operator("gemini.delete_message", text="", icon="TRASH", emboss=False)
+                delete_message_op = row.operator(
+                    "gemini.delete_message", text="", icon="TRASH", emboss=False
+                )
                 delete_message_op.message_index = index
 
         column.separator()
@@ -320,18 +394,32 @@ class GEMINI_PT_Panel(bpy.types.Panel):
 
         column.label(text="Enter your message:")
         column.prop(context.scene, "gemini_chat_input", text="")
-        button_label = "Please wait...(this might take some time)" if context.scene.gemini_button_pressed else "Execute"
+        button_label = (
+            "Please wait...(this might take some time)"
+            if context.scene.gemini_button_pressed
+            else "Execute"
+        )
         # Minimal toggles retained per user request
         row = column.row(align=True)
-        row.prop(context.scene, "gemini_include_geometry", text="Include Selected Geometry")
+        row.prop(
+            context.scene, "gemini_include_geometry", text="Include Selected Geometry"
+        )
+        row.operator("gemini.copy_geometry", text="", icon="COPY_ID", emboss=False)
         row = column.row(align=True)
         row.prop(context.scene, "gemini_use_3d_cursor", text="Target with 3D Cursor")
+        row.operator("gemini.copy_cursor", text="", icon="COPY_ID", emboss=False)
         if context.scene.gemini_use_3d_cursor:
             cursor = context.scene.cursor
             box = column.box()
-            box.label(text=f"Location: ({cursor.location.x:.4f}, {cursor.location.y:.4f}, {cursor.location.z:.4f})")
+            box.label(
+                text=f"Location: ({cursor.location.x:.4f}, {cursor.location.y:.4f}, {cursor.location.z:.4f})"
+            )
         row = column.row(align=True)
-        row.prop(context.scene, "gemini_include_viewport_screenshot", text="Attach Viewport Screenshot")
+        row.prop(
+            context.scene,
+            "gemini_include_viewport_screenshot",
+            text="Attach Viewport Screenshot",
+        )
         row = column.row(align=True)
         row.prop(context.scene, "gemini_enable_grounding", text="Enable Grounding")
         row = column.row(align=True)
@@ -362,7 +450,10 @@ class GEMINI_OT_Execute(bpy.types.Operator):
             api_key = os.getenv("GEMINI_API_KEY")
 
         if not api_key:
-            self.report({"ERROR"}, "No API key detected. Please set your Gemini API key in the addon preferences.")
+            self.report(
+                {"ERROR"},
+                "No API key detected. Please set your Gemini API key in the addon preferences.",
+            )
             return {"CANCELLED"}
 
         preferences = context.preferences
@@ -413,12 +504,18 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                 exec(blender_code, namespace)
             except Exception as e:
                 if max_fix_attempts <= 0:
-                    self.report({"ERROR"}, f"Error executing code and fixes are disabled: {str(e)}")
+                    self.report(
+                        {"ERROR"},
+                        f"Error executing code and fixes are disabled: {str(e)}",
+                    )
                     context.scene.gemini_button_pressed = False
                     return {"CANCELLED"}
 
                 error_message = f"Error executing generated code: {str(e)}"
-                self.report({"WARNING"}, f"Original code had an error. Attempting to fix (1/{max_fix_attempts})...")
+                self.report(
+                    {"WARNING"},
+                    f"Original code had an error. Attempting to fix (1/{max_fix_attempts})...",
+                )
 
                 context.scene.gemini_chat_history.remove(history_index)
 
@@ -449,7 +546,10 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                     )
 
                     if not fixed_code:
-                        self.report({"ERROR"}, f"Could not fix the code on attempt {attempt}: {current_error}")
+                        self.report(
+                            {"ERROR"},
+                            f"Could not fix the code on attempt {attempt}: {current_error}",
+                        )
                         context.scene.gemini_button_pressed = False
                         return {"CANCELLED"}
 
@@ -462,16 +562,22 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                         _ensure_object_mode()
                         namespace = _make_namespace(context)
                         exec(fixed_code, namespace)
-                        self.report({"INFO"}, f"Code fixed and executed successfully on attempt {attempt}!")
+                        self.report(
+                            {"INFO"},
+                            f"Code fixed and executed successfully on attempt {attempt}!",
+                        )
                         break
                     except Exception as e2:
                         current_error = f"Error executing fixed code: {str(e2)}"
 
                         if attempt < max_fix_attempts:
-                            self.report({"WARNING"}, (
-                                f"Fix attempt {attempt} had an error. Attempting to fix again "
-                                f"({attempt + 1}/{max_fix_attempts})..."
-                            ))
+                            self.report(
+                                {"WARNING"},
+                                (
+                                    f"Fix attempt {attempt} had an error. Attempting to fix again "
+                                    f"({attempt + 1}/{max_fix_attempts})..."
+                                ),
+                            )
 
                             context.scene.gemini_chat_history.remove(fix_history_index)
 
@@ -487,11 +593,17 @@ class GEMINI_OT_Execute(bpy.types.Operator):
 
                             current_code = fixed_code
                         else:
-                            self.report({"ERROR"}, f"Error executing code after {max_fix_attempts} fix attempts: {e2}")
+                            self.report(
+                                {"ERROR"},
+                                f"Error executing code after {max_fix_attempts} fix attempts: {e2}",
+                            )
                             context.scene.gemini_button_pressed = False
                             return {"CANCELLED"}
         else:
-            self.report({"ERROR"}, "Failed to generate code from Gemini API. Please check the console for details.")
+            self.report(
+                {"ERROR"},
+                "Failed to generate code from Gemini API. Please check the console for details.",
+            )
             context.scene.gemini_button_pressed = False
             return {"CANCELLED"}
 
@@ -575,6 +687,8 @@ classes = [
     GEMINI_PT_Panel,
     GEMINI_OT_ClearChat,
     GEMINI_OT_ShowCode,
+    GEMINI_OT_CopyGeometry,
+    GEMINI_OT_CopyCursor,
 ]
 
 

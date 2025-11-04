@@ -1,5 +1,6 @@
 import base64
 import heapq
+import json
 import math
 import os
 import re
@@ -30,40 +31,59 @@ def _ensure_object_mode_for_screenshot(preserve_edit_mode=True):
         if obj is None:
             return lambda: None
         prev_mode = obj.mode
-        if prev_mode != 'OBJECT':
-            if preserve_edit_mode and prev_mode == 'EDIT':
+        if prev_mode != "OBJECT":
+            if preserve_edit_mode and prev_mode == "EDIT":
                 # Keep Edit Mode; no switch, but still provide restore closure
                 return lambda: None
             try:
-                bpy.ops.object.mode_set(mode='OBJECT')
+                bpy.ops.object.mode_set(mode="OBJECT")
             except Exception:
                 # If we cannot switch, best effort: do not attempt restore
                 return lambda: None
 
         def _restore():
             try:
-                if obj and prev_mode != 'OBJECT':
+                if obj and prev_mode != "OBJECT":
                     bpy.ops.object.mode_set(mode=prev_mode)
             except Exception:
                 pass
+
         return _restore
     except Exception:
         return lambda: None
 
 
 def init_props():
-    bpy.types.Scene.gemini_chat_history = bpy.props.CollectionProperty(type=bpy.types.PropertyGroup)
+    bpy.types.Scene.gemini_chat_history = bpy.props.CollectionProperty(
+        type=bpy.types.PropertyGroup
+    )
     bpy.types.Scene.gemini_model = bpy.props.EnumProperty(
         name="Gemini Model",
         description="Select the Gemini model to use",
         items=[
             ("gemini-2.5-pro", "Gemini 2.5 Pro", "Use Gemini 2.5 Pro"),
-            ("gemini-2.5-flash-preview-09-2025", "Gemini 2.5 Flash Preview 09-2025", "Use Gemini 2.5 Flash Preview 09-2025"),
+            (
+                "gemini-2.5-flash-preview-09-2025",
+                "Gemini 2.5 Flash Preview 09-2025",
+                "Use Gemini 2.5 Flash Preview 09-2025",
+            ),
             ("gemini-2.5-flash", "Gemini 2.5 Flash", "Use Gemini 2.5 Flash"),
-            ("gemini-2.5-flash-lite-preview-09-2025", "Gemini 2.5 Flash Lite Preview 09-2025", "Use Gemini 2.5 Flash Lite Preview 09-2025"),
-            ("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite", "Use Gemini 2.5 Flash Lite"),
+            (
+                "gemini-2.5-flash-lite-preview-09-2025",
+                "Gemini 2.5 Flash Lite Preview 09-2025",
+                "Use Gemini 2.5 Flash Lite Preview 09-2025",
+            ),
+            (
+                "gemini-2.5-flash-lite",
+                "Gemini 2.5 Flash Lite",
+                "Use Gemini 2.5 Flash Lite",
+            ),
             ("gemini-2.0-flash", "Gemini 2.0 Flash", "Use Gemini 2.0 Flash"),
-            ("gemini-2.0-flash-lite", "Gemini 2.0 Flash Lite", "Use Gemini 2.0 Flash Lite"),
+            (
+                "gemini-2.0-flash-lite",
+                "Gemini 2.0 Flash Lite",
+                "Use Gemini 2.0 Flash Lite",
+            ),
         ],
         default="gemini-2.5-flash",
     )
@@ -109,7 +129,9 @@ def make_gemini_api_request(url, headers, data):
             return response.json()["candidates"][0]["content"]["parts"][0]["text"]
 
         except requests.exceptions.RequestException as e:
-            error_msg = f"API request failed (attempt {attempt + 1}/{max_retries}): {str(e)}"
+            error_msg = (
+                f"API request failed (attempt {attempt + 1}/{max_retries}): {str(e)}"
+            )
             print(error_msg)
 
             if attempt < max_retries - 1:
@@ -143,19 +165,27 @@ def capture_viewport_screenshot_base64(context, max_size=1024):
                 if area.type == "VIEW_3D":
                     for region in area.regions:
                         if region.type == "WINDOW":
-                            tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                            tmp_file = tempfile.NamedTemporaryFile(
+                                delete=False, suffix=".png"
+                            )
                             tmp_path = tmp_file.name
                             tmp_file.close()
                             loaded_img = None
                             try:
                                 # Use a lightweight region-only screenshot to avoid heavy draw-engine paths
-                                with context.temp_override(window=window, area=area, region=region):
-                                    bpy.ops.screen.screenshot(filepath=tmp_path, full=False)
+                                with context.temp_override(
+                                    window=window, area=area, region=region
+                                ):
+                                    bpy.ops.screen.screenshot(
+                                        filepath=tmp_path, full=False
+                                    )
 
                                 # Optionally downscale if larger than max_size
                                 try:
                                     loaded_img = bpy.data.images.load(tmp_path)
-                                    width, height = int(loaded_img.size[0]), int(loaded_img.size[1])
+                                    width, height = int(loaded_img.size[0]), int(
+                                        loaded_img.size[1]
+                                    )
                                     largest = max(width, height)
                                     if max_size and largest > int(max_size):
                                         scale = float(max_size) / float(largest)
@@ -163,7 +193,7 @@ def capture_viewport_screenshot_base64(context, max_size=1024):
                                         new_h = max(1, int(round(height * scale)))
                                         loaded_img.scale(new_w, new_h)
                                         loaded_img.filepath_raw = tmp_path
-                                        loaded_img.file_format = 'PNG'
+                                        loaded_img.file_format = "PNG"
                                         try:
                                             loaded_img.save()
                                         except Exception:
@@ -206,7 +236,9 @@ def get_scene_objects_as_text(context):
     for obj in objects:
         scene_summary += f"- Object Name: `{obj.name}`, Type: `{obj.type}`"
         if obj.type == "MESH":
-            scene_summary += f", Vertices: {len(obj.data.vertices)}, Faces: {len(obj.data.polygons)}"
+            scene_summary += (
+                f", Vertices: {len(obj.data.vertices)}, Faces: {len(obj.data.polygons)}"
+            )
         scene_summary += f", Location: {obj.location}\n"
     return scene_summary
 
@@ -254,7 +286,9 @@ def _summarize_objects_near_cursor(context, max_count=3):
             if getattr(obj, "bound_box", None):
                 try:
                     min_corner_dist = min(
-                        (obj.matrix_world @ mathutils.Vector(corner) - cursor_loc).length
+                        (
+                            obj.matrix_world @ mathutils.Vector(corner) - cursor_loc
+                        ).length
                         for corner in obj.bound_box
                     )
                 except Exception:
@@ -273,6 +307,52 @@ def _summarize_objects_near_cursor(context, max_count=3):
     for dist, obj in candidates[: max_count if max_count and max_count > 0 else 3]:
         lines.append(f"- `{obj.name}` (Type: {obj.type}) — Distance: {dist:.4f}")
     return "\n".join(lines)
+
+
+def _get_nearest_objects_json(context, max_count=3):
+    """Return a list of dicts with nearest visible objects to the 3D cursor."""
+    try:
+        cursor_loc = context.scene.cursor.location
+    except Exception:
+        return []
+
+    candidates = []
+    for obj in context.scene.objects:
+        try:
+            if not obj.visible_get():
+                continue
+        except Exception:
+            continue
+
+        try:
+            center = obj.matrix_world.to_translation()
+            center_dist = (center - cursor_loc).length
+
+            min_corner_dist = center_dist
+            if getattr(obj, "bound_box", None):
+                try:
+                    min_corner_dist = min(
+                        (
+                            obj.matrix_world @ mathutils.Vector(corner) - cursor_loc
+                        ).length
+                        for corner in obj.bound_box
+                    )
+                except Exception:
+                    pass
+
+            proximity = min(center_dist, min_corner_dist)
+            candidates.append((proximity, obj))
+        except Exception:
+            continue
+
+    if not candidates:
+        return []
+
+    candidates.sort(key=lambda item: item[0])
+    result = []
+    for dist, obj in candidates[: max_count if max_count and max_count > 0 else 3]:
+        result.append({"name": obj.name, "type": obj.type, "distance": round(dist, 4)})
+    return result
 
 
 def _build_3d_cursor_context_block(context, include_nearest=True, nearest_count=3):
@@ -326,7 +406,11 @@ def _choose_cursor_target_object(context):
     if active is not None:
         try:
             if active.visible_get():
-                return (active, "active selection", (active.matrix_world.to_translation() - cursor_loc).length)
+                return (
+                    active,
+                    "active selection",
+                    (active.matrix_world.to_translation() - cursor_loc).length,
+                )
         except Exception:
             pass
 
@@ -380,39 +464,232 @@ def _build_cursor_target_object_block(context):
         return ""
 
 
+def _build_3d_cursor_context_json(context, include_nearest=True, nearest_count=3):
+    """Build JSON structure for 3D cursor state."""
+    try:
+        cursor = context.scene.cursor
+        loc = cursor.location
+        rot_euler = cursor.rotation_euler
+        rot_deg = tuple(math.degrees(a) for a in rot_euler)
+        mat = cursor.matrix.copy()
+        basis = mat.to_3x3()
+        right = (basis @ mathutils.Vector((1.0, 0.0, 0.0))).normalized()
+        up = (basis @ mathutils.Vector((0.0, 1.0, 0.0))).normalized()
+        forward = (basis @ mathutils.Vector((0.0, 0.0, 1.0))).normalized()
+
+        cursor_state = {
+            "location": {
+                "x": round(loc.x, 4),
+                "y": round(loc.y, 4),
+                "z": round(loc.z, 4),
+            },
+            "rotation": {
+                "euler_radians": {
+                    "x": round(rot_euler.x, 5),
+                    "y": round(rot_euler.y, 5),
+                    "z": round(rot_euler.z, 5),
+                },
+                "euler_degrees": {
+                    "x": round(rot_deg[0], 2),
+                    "y": round(rot_deg[1], 2),
+                    "z": round(rot_deg[2], 2),
+                },
+            },
+            "orientation_axes": {
+                "right_x": [round(right.x, 4), round(right.y, 4), round(right.z, 4)],
+                "up_y": [round(up.x, 4), round(up.y, 4), round(up.z, 4)],
+                "fwd_z": [
+                    round(forward.x, 4),
+                    round(forward.y, 4),
+                    round(forward.z, 4),
+                ],
+            },
+        }
+
+        if include_nearest:
+            cursor_state["nearest_objects"] = _get_nearest_objects_json(
+                context, max_count=nearest_count
+            )
+        else:
+            cursor_state["nearest_objects"] = []
+
+        return cursor_state
+    except Exception:
+        return {
+            "location": {"x": 0.0000, "y": 0.0000, "z": 0.0000},
+            "rotation": {
+                "euler_radians": {"x": 0.00000, "y": 0.00000, "z": 0.00000},
+                "euler_degrees": {"x": 0.00, "y": 0.00, "z": 0.00},
+            },
+            "orientation_axes": {
+                "right_x": [1.0000, 0.0000, 0.0000],
+                "up_y": [0.0000, 1.0000, 0.0000],
+                "fwd_z": [0.0000, 0.0000, 1.0000],
+            },
+            "nearest_objects": [],
+        }
+
+
+def _build_cursor_target_object_json(context):
+    """Build JSON structure for cursor target object."""
+    try:
+        obj, reason, dist = _choose_cursor_target_object(context)
+        if obj is None:
+            return None
+
+        cursor_ws = context.scene.cursor.location.copy()
+        local_cursor = obj.matrix_world.inverted() @ cursor_ws
+
+        return {
+            "name": obj.name,
+            "type": obj.type,
+            "reason": reason,
+            "distance": round(dist, 4) if dist is not None else None,
+            "cursor_local_space": {
+                "x": round(local_cursor.x, 4),
+                "y": round(local_cursor.y, 4),
+                "z": round(local_cursor.z, 4),
+            },
+        }
+    except Exception:
+        return None
+
+
+def _format_cursor_json_compact(obj):
+    """Format JSON in compact/minified format (no indentation, minimal whitespace)."""
+    return json.dumps(obj, separators=(',', ':'))
+
+
+def _build_complete_cursor_json(context):
+    """Build complete JSON structure combining cursor_state and cursor_target_object."""
+    cursor_state = _build_3d_cursor_context_json(
+        context, include_nearest=True, nearest_count=3
+    )
+    cursor_target_object = _build_cursor_target_object_json(context)
+
+    return {"cursor_state": cursor_state, "cursor_target_object": cursor_target_object}
+
+
 def get_detailed_object_data(obj):
     """
-    Serializes the geometry of a single Blender object into a detailed text format.
+    Serializes the geometry of a single Blender object into a JSON format.
     Includes a limit to avoid excessively long outputs for high-poly meshes.
+    Returns a JSON string with object name, vertex count, face count, edge count,
+    vertices (with normals), edges (only those part of faces), and faces (with normals and UVs).
     """
     if not obj or obj.type != "MESH":
-        return "No mesh object selected for detailed analysis."
+        error_dict = {"error": "No mesh object selected for detailed analysis."}
+        return _format_cursor_json_compact(error_dict)
 
     data = obj.data
     vertex_limit = 500
     face_limit = 1000
+    edge_limit = 1500
 
-    summary = f"Detailed Geometry for Object: `{obj.name}`\n"
-    summary += "- Type: MESH\n"
-    summary += f"- Vertex count: {len(data.vertices)}\n"
-    summary += f"- Face count: {len(data.polygons)}\n"
+    vertex_count = len(data.vertices)
+    face_count = len(data.polygons)
 
-    if len(data.vertices) > vertex_limit or len(data.polygons) > face_limit:
-        summary += (
-            f"- NOTE: Geometry is too dense to display full details "
-            f"(limit: {vertex_limit} vertices, {face_limit} faces).\\n"
-        )
-        return summary
+    # Build set of edges that are part of faces (for efficient lookup and limit check)
+    edges_in_faces_set = set()
+    for face in data.polygons:
+        for edge_key in face.edge_keys:
+            # edge_key is a tuple of (v1, v2) - sort to ensure consistent ordering
+            edges_in_faces_set.add(tuple(sorted(edge_key)))
+    edge_count = len(edges_in_faces_set)
 
-    summary += "Vertices (x, y, z):\\n"
-    for v in data.vertices:
-        summary += f"  - ({v.co.x:.4f}, {v.co.y:.4f}, {v.co.z:.4f})\n"
+    # Check if limits are exceeded
+    if (
+        vertex_count > vertex_limit
+        or face_count > face_limit
+        or edge_count > edge_limit
+    ):
+        simplified_dict = {
+            "objectName": obj.name,
+            "meshData": {
+                "vertexCount": vertex_count,
+                "faceCount": face_count,
+                "edgeCount": edge_count,
+                "note": (
+                    f"Geometry is too dense to display full details "
+                    f"(limit: {vertex_limit} vertices, {face_limit} faces, {edge_limit} edges). "
+                    f"Only summary information is included."
+                ),
+                "simplified": True,
+            },
+        }
+        return _format_cursor_json_compact(simplified_dict)
 
-    summary += "Faces (vertex indices):\n"
-    for f in data.polygons:
-        summary += f"  - {list(f.vertices)}\n"
+    # Get UV layer if available
+    uv_layer = None
+    try:
+        if data.uv_layers and len(data.uv_layers) > 0:
+            uv_layer = data.uv_layers[0]
+    except Exception:
+        pass
 
-    return summary
+    # Build vertices as list of dicts (includes normals)
+    vertices_list = []
+    for idx, v in enumerate(data.vertices):
+        pos = [round(v.co.x, 4), round(v.co.y, 4), round(v.co.z, 4)]
+        # Get vertex normal (ensure it's calculated)
+        normal = v.normal
+        normal_vec = [round(normal.x, 4), round(normal.y, 4), round(normal.z, 4)]
+        vertices_list.append({"id": idx, "position": pos, "normal": normal_vec})
+
+    # Collect edges that are part of faces
+    edges_list = []
+    edge_index_map = {}  # Map (sorted edge_key) -> edge index
+    edge_counter = 0
+
+    for edge in data.edges:
+        edge_key = tuple(sorted(edge.vertices[:]))
+        if edge_key in edges_in_faces_set:
+            if edge_key not in edge_index_map:
+                edge_index_map[edge_key] = edge_counter
+                edges_list.append({"id": edge_counter, "vertices": list(edge_key)})
+                edge_counter += 1
+
+    # Build faces as list of dicts (includes normals and UVs)
+    faces_list = []
+    for idx, f in enumerate(data.polygons):
+        face_verts = list(f.vertices)
+        # Get face normal
+        face_normal = f.normal
+        normal_vec = [
+            round(face_normal.x, 4),
+            round(face_normal.y, 4),
+            round(face_normal.z, 4),
+        ]
+
+        # Get UV coordinates per face corner
+        uv_coords = []
+        if uv_layer:
+            try:
+                for loop_idx in f.loop_indices:
+                    uv = uv_layer.data[loop_idx].uv
+                    uv_coords.append([round(uv.x, 4), round(uv.y, 4)])
+            except Exception:
+                pass
+
+        face_dict = {"id": idx, "vertices": face_verts, "normal": normal_vec}
+        if uv_coords:
+            face_dict["uvs"] = uv_coords
+        faces_list.append(face_dict)
+
+    # Build result dict structure
+    result_dict = {
+        "objectName": obj.name,
+        "meshData": {
+            "vertexCount": vertex_count,
+            "faceCount": face_count,
+            "edgeCount": len(edges_list),
+            "vertices": vertices_list,
+            "edges": edges_list,
+            "faces": faces_list,
+        },
+    }
+
+    return _format_cursor_json_compact(result_dict)
 
 
 def _compute_falloff_weight(t, mode="SMOOTH"):
@@ -453,7 +730,7 @@ def get_vertices_in_radius(obj, center_local, radius):
         bm = None
         is_edit_mode = False
         try:
-            is_edit_mode = getattr(obj, "mode", "OBJECT") == 'EDIT'
+            is_edit_mode = getattr(obj, "mode", "OBJECT") == "EDIT"
         except Exception:
             is_edit_mode = False
 
@@ -466,7 +743,8 @@ def get_vertices_in_radius(obj, center_local, radius):
         bm.verts.ensure_lookup_table()
 
         center_vec = (
-            center_local if isinstance(center_local, mathutils.Vector)
+            center_local
+            if isinstance(center_local, mathutils.Vector)
             else mathutils.Vector((center_local.x, center_local.y, center_local.z))
         )
         in_radius = []
@@ -492,7 +770,7 @@ def get_vertices_in_geodesic_radius(obj, center_world, radius):
         bm = None
         is_edit_mode = False
         try:
-            is_edit_mode = getattr(obj, "mode", "OBJECT") == 'EDIT'
+            is_edit_mode = getattr(obj, "mode", "OBJECT") == "EDIT"
         except Exception:
             is_edit_mode = False
 
@@ -530,7 +808,9 @@ def get_vertices_in_geodesic_radius(obj, center_world, radius):
             for e in v.link_edges:
                 w = e.other_vert(v)
                 cand = dist_u + (w.co - v.co).length
-                if cand <= radius and (w.index not in distances or cand < distances[w.index]):
+                if cand <= radius and (
+                    w.index not in distances or cand < distances[w.index]
+                ):
                     distances[w.index] = cand
                     heapq.heappush(heap, (cand, w.index))
 
@@ -544,7 +824,10 @@ def get_vertices_in_geodesic_radius(obj, center_world, radius):
 def _world_bbox_stats(obj):
     """Return (size_vec, diag_len) of object's world-space AABB."""
     try:
-        corners = [obj.matrix_world @ mathutils.Vector(c) for c in getattr(obj, "bound_box", [])]
+        corners = [
+            obj.matrix_world @ mathutils.Vector(c)
+            for c in getattr(obj, "bound_box", [])
+        ]
         if not corners:
             return (mathutils.Vector((1.0, 1.0, 1.0)), 1.0)
         min_x = min(v.x for v in corners)
@@ -647,11 +930,11 @@ def ensure_subsurf_for_local_detail(obj, target_levels=2):
     try:
         mod = None
         for m in obj.modifiers:
-            if m.type == 'SUBSURF':
+            if m.type == "SUBSURF":
                 mod = m
                 break
         if mod is None:
-            mod = obj.modifiers.new(name="GeminiDetailSubdivision", type='SUBSURF')
+            mod = obj.modifiers.new(name="GeminiDetailSubdivision", type="SUBSURF")
         mod.levels = max(mod.levels, target_levels)
         mod.render_levels = max(mod.render_levels, target_levels)
         return mod
@@ -659,7 +942,9 @@ def ensure_subsurf_for_local_detail(obj, target_levels=2):
         return None
 
 
-def get_local_geometry_patch_text(obj, center_world, radius, vertex_limit=2000, face_limit=4000):
+def get_local_geometry_patch_text(
+    obj, center_world, radius, vertex_limit=2000, face_limit=4000
+):
     """
     Returns a compact text of vertices and faces within a geodesic radius around center_world.
     Limits to keep the prompt bounded.
@@ -723,7 +1008,7 @@ def apply_radial_shrink_fatten(
         mesh = obj.data
         is_edit_mode = False
         try:
-            is_edit_mode = getattr(obj, "mode", "OBJECT") == 'EDIT'
+            is_edit_mode = getattr(obj, "mode", "OBJECT") == "EDIT"
         except Exception:
             is_edit_mode = False
 
@@ -753,7 +1038,11 @@ def apply_radial_shrink_fatten(
                 v.co = v.co - n * (strength * w)
 
         # Ensure Vector type
-        center_vec = center_local if isinstance(center_local, mathutils.Vector) else mathutils.Vector(center_local)
+        center_vec = (
+            center_local
+            if isinstance(center_local, mathutils.Vector)
+            else mathutils.Vector(center_local)
+        )
         _apply(center_vec)
 
         if mirror:
@@ -804,7 +1093,11 @@ def generate_blender_code(
     contents = []
     for message in chat_history[-10:]:  # Keep last 10 messages for context
         role = "user" if message.type == "user" else "model"
-        content = message.content if message.type == "user" else "```\n" + message.content + "\n```"
+        content = (
+            message.content
+            if message.type == "user"
+            else "```\n" + message.content + "\n```"
+        )
         contents.append({"role": role, "parts": [{"text": content}]})
 
     scene_context = get_scene_objects_as_text(context)
@@ -813,26 +1106,27 @@ def generate_blender_code(
     # Subtle environment hint
     full_prompt += f"(Blender {blender_version})\n\n"
     if detailed_geometry:
-        full_prompt += "**Detailed Object Geometry:**\n" + detailed_geometry + "\n\n"
+        full_prompt += (
+            "**Detailed Object Geometry:**\n```json\n" + detailed_geometry + "\n```\n\n"
+        )
 
     if use_3d_cursor:
-        full_prompt += _build_3d_cursor_context_block(context)
-        full_prompt += _build_cursor_target_object_block(context)
+        cursor_json = _build_complete_cursor_json(context)
+        cursor_json_str = _format_cursor_json_compact(cursor_json)
+        full_prompt += "**3D Cursor Data:**\n```json\n" + cursor_json_str + "\n```\n\n"
         # Advertise built-in helpers for precise localized edits
         full_prompt += (
             "**[AVAILABLE HELPERS]:**\n"
             "- apply_radial_shrink_fatten(obj, center_local, radius, strength,\n"
-            "  falloff=\"SMOOTH\", mirror=False, mirror_axis=\"X\")\n"
+            '  falloff="SMOOTH", mirror=False, mirror_axis="X")\n'
             "- get_vertices_in_radius(obj, center_local, radius)\n"
             "- get_vertices_in_geodesic_radius(obj, center_world, radius)\n"
             "- raycast_surface(obj, origin_world, direction_world, max_distance=1000.0)\n"
             "- project_point_to_surface_near(obj, guess_world, max_distance=1000.0)\n"
             "- ensure_subsurf_for_local_detail(obj, target_levels=2)\n"
-            "- get_local_geometry_patch_text(obj, center_world, radius,\n"
-            "  vertex_limit=2000, face_limit=4000)\n"
+            "- get_local_geometry_patch_text(obj, center_world, radius, vertex_limit=2000, face_limit=4000)\n"
             "\n"
         )
-        full_prompt += "\n"
 
         # Automatically include a compact local geometry patch around the cursor
         try:
@@ -851,7 +1145,9 @@ def generate_blender_code(
             "orientation and selection state.\n\n"
         )
 
-    full_prompt += "**Scene Summary:**\n" + scene_context + "\n\nUser Request: " + prompt
+    full_prompt += (
+        "**Scene Summary:**\n" + scene_context + "\n\nUser Request: " + prompt
+    )
 
     user_parts = [{"text": full_prompt}]
     if include_viewport_screenshot:
@@ -937,25 +1233,26 @@ def fix_blender_code(
     if detailed_geometry:
         detailed_geo_block = f"""
 **[DETAILED GEOMETRY OF SELECTED OBJECT]:**
-```
+```json
 {detailed_geometry}
 ```
 """
 
     cursor_block = ""
     if use_3d_cursor:
-        cursor_block = _build_3d_cursor_context_block(context) + _build_cursor_target_object_block(context)
+        cursor_json = _build_complete_cursor_json(context)
+        cursor_json_str = _format_cursor_json_compact(cursor_json)
+        cursor_block = "**3D Cursor Data:**\n```json\n" + cursor_json_str + "\n```\n\n"
         cursor_block += (
             "**[AVAILABLE HELPERS]:**\n"
-            "- apply_radial_shrink_fatten(obj, center_local, radius, strength, falloff=\"SMOOTH\",\n"
-            "  mirror=False, mirror_axis=\"X\")\n"
+            '- apply_radial_shrink_fatten(obj, center_local, radius, strength, falloff="SMOOTH",\n'
+            '  mirror=False, mirror_axis="X")\n'
             "- get_vertices_in_radius(obj, center_local, radius)\n"
             "- get_vertices_in_geodesic_radius(obj, center_world, radius)\n"
             "- raycast_surface(obj, origin_world, direction_world, max_distance=1000.0)\n"
             "- project_point_to_surface_near(obj, guess_world, max_distance=1000.0)\n"
             "- ensure_subsurf_for_local_detail(obj, target_levels=2)\n"
-            "- get_local_geometry_patch_text(obj, center_world, radius, vertex_limit=2000,\n"
-            "  face_limit=4000)\n"
+            "- get_local_geometry_patch_text(obj, center_world, radius, vertex_limit=2000, face_limit=4000)\n"
         )
 
     screenshot_block = ""
@@ -1031,9 +1328,7 @@ You will be given a script that failed, its error, and a scene summary. Use all 
     if include_viewport_screenshot:
         image_b64 = capture_viewport_screenshot_base64(context)
         if image_b64:
-            parts.append(
-                {"inlineData": {"mimeType": "image/png", "data": image_b64}}
-            )
+            parts.append({"inlineData": {"mimeType": "image/png", "data": image_b64}})
 
     data = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
