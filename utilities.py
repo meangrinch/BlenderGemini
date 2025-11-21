@@ -61,6 +61,7 @@ def init_props():
         name="Gemini Model",
         description="Select the Gemini model to use",
         items=[
+            ("gemini-3-pro-preview", "Gemini 3 Pro Preview", "Use Gemini 3 Pro Preview"),
             ("gemini-2.5-pro", "Gemini 2.5 Pro", "Use Gemini 2.5 Pro"),
             (
                 "gemini-2.5-flash-preview-09-2025",
@@ -355,41 +356,6 @@ def _get_nearest_objects_json(context, max_count=3):
     return result
 
 
-def _build_3d_cursor_context_block(context, include_nearest=True, nearest_count=3):
-    """
-    Compose a rich context block describing the 3D Cursor's transform and nearby objects.
-    """
-    try:
-        cursor = context.scene.cursor
-        loc = cursor.location
-        rot_euler = cursor.rotation_euler
-        rot_deg = tuple(math.degrees(a) for a in rot_euler)
-        mat = cursor.matrix.copy()
-        basis = mat.to_3x3()
-        right = (basis @ mathutils.Vector((1.0, 0.0, 0.0))).normalized()
-        up = (basis @ mathutils.Vector((0.0, 1.0, 0.0))).normalized()
-        forward = (basis @ mathutils.Vector((0.0, 0.0, 1.0))).normalized()
-
-        block = (
-            "**[3D CURSOR (World Space)]:**\n"
-            f"- Location: ({loc.x:.4f}, {loc.y:.4f}, {loc.z:.4f})\n"
-            f"- Rotation (Euler, radians): ({rot_euler.x:.5f}, {rot_euler.y:.5f}, {rot_euler.z:.5f})\n"
-            f"- Rotation (Euler, degrees): ({rot_deg[0]:.2f}, {rot_deg[1]:.2f}, {rot_deg[2]:.2f})\n"
-            "- Orientation axes (unit vectors):\n"
-            f"  - Right +X: ({right.x:.4f}, {right.y:.4f}, {right.z:.4f})\n"
-            f"  - Up    +Y: ({up.x:.4f}, {up.y:.4f}, {up.z:.4f})\n"
-            f"  - Fwd   +Z: ({forward.x:.4f}, {forward.y:.4f}, {forward.z:.4f})\n"
-        )
-
-        if include_nearest:
-            nearby = _summarize_objects_near_cursor(context, max_count=nearest_count)
-            block += "- Objects nearest to cursor:\n" + nearby + "\n"
-
-        return block
-    except Exception:
-        return ""
-
-
 def _choose_cursor_target_object(context):
     """
     Choose a target object for cursor-based operations:
@@ -432,36 +398,6 @@ def _choose_cursor_target_object(context):
         return (nearest, "nearest visible mesh", nearest_dist)
 
     return (None, "No visible candidates", None)
-
-
-def _build_cursor_target_object_block(context):
-    """
-    If a reasonable object candidate exists, provide a block describing it along with
-    the cursor expressed in that object's local space.
-    """
-    try:
-        obj, reason, dist = _choose_cursor_target_object(context)
-        if obj is None:
-            return "**[CURSOR TARGET OBJECT]:** None\n"
-
-        cursor_ws = context.scene.cursor.location.copy()
-        local_cursor = obj.matrix_world.inverted() @ cursor_ws
-        block = (
-            "**[CURSOR TARGET OBJECT]:**\n"
-            f"- Name: `{obj.name}` (Type: {obj.type}) — Reason: {reason}"
-        )
-        if dist is not None:
-            block += f" — Distance: {dist:.4f}\n"
-        else:
-            block += "\n"
-        block += (
-            f"- Cursor in `{obj.name}` local space: ("
-            f"{local_cursor.x:.4f}, {local_cursor.y:.4f}, {local_cursor.z:.4f}"
-            ")\n"
-        )
-        return block
-    except Exception:
-        return ""
 
 
 def _build_3d_cursor_context_json(context, include_nearest=True, nearest_count=3):
@@ -1184,9 +1120,12 @@ def generate_blender_code(
     except Exception:
         pass
 
-    # Configure thinking budget for Gemini 2.5 series models
+    # Configure thinking for Gemini models
     model_name = context.scene.gemini_model or ""
-    if model_name.startswith("gemini-2.5-"):
+    if model_name.startswith("gemini-3-pro"):
+        # Gemini 3 Pro always thinks and uses thinkingLevel
+        data["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "high"}
+    elif model_name.startswith("gemini-2.5-"):
         if "pro" in model_name:
             # Gemini 2.5 Pro always thinks
             data["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 32768}
@@ -1353,9 +1292,12 @@ You will be given a script that failed, its error, and a scene summary. Use all 
     except Exception:
         pass
 
-    # Configure thinking budget for Gemini 2.5 series models
+    # Configure thinking for Gemini models
     model_name = context.scene.gemini_model or ""
-    if model_name.startswith("gemini-2.5-"):
+    if model_name.startswith("gemini-3-pro"):
+        # Gemini 3 Pro always thinks and uses thinkingLevel
+        data["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "high"}
+    elif model_name.startswith("gemini-2.5-"):
         if "pro" in model_name:
             # Gemini 2.5 Pro always thinks
             data["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 32768}
