@@ -630,7 +630,7 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
     temperature: bpy.props.FloatProperty(
         name="Temperature",
         description="Controls randomness: Lower values are more deterministic, higher values more creative",
-        default=0.20,
+        default=1.0,
         min=0.0,
         max=1.0,
         precision=2,
