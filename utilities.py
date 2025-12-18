@@ -61,7 +61,16 @@ def init_props():
         name="Gemini Model",
         description="Select the Gemini model to use",
         items=[
-            ("gemini-3-pro-preview", "Gemini 3 Pro Preview", "Use Gemini 3 Pro Preview"),
+            (
+                "gemini-3-pro-preview",
+                "Gemini 3 Pro Preview",
+                "Use Gemini 3 Pro Preview",
+            ),
+            (
+                "gemini-3-flash-preview",
+                "Gemini 3 Flash Preview",
+                "Use Gemini 3 Flash Preview",
+            ),
             ("gemini-2.5-pro", "Gemini 2.5 Pro", "Use Gemini 2.5 Pro"),
             (
                 "gemini-2.5-flash-preview-09-2025",
@@ -86,7 +95,7 @@ def init_props():
                 "Use Gemini 2.0 Flash Lite",
             ),
         ],
-        default="gemini-2.5-flash",
+        default="gemini-3-flash-preview",
     )
     bpy.types.Scene.gemini_chat_input = bpy.props.StringProperty(
         name="Message",
@@ -493,7 +502,7 @@ def _build_cursor_target_object_json(context):
 
 def _format_cursor_json_compact(obj):
     """Format JSON in compact/minified format (no indentation, minimal whitespace)."""
-    return json.dumps(obj, separators=(',', ':'))
+    return json.dumps(obj, separators=(",", ":"))
 
 
 def _build_complete_cursor_json(context):
@@ -1122,9 +1131,18 @@ def generate_blender_code(
 
     # Configure thinking for Gemini models
     model_name = context.scene.gemini_model or ""
-    if model_name.startswith("gemini-3-pro"):
-        # Gemini 3 Pro always thinks and uses thinkingLevel
-        data["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "high"}
+    if model_name.startswith("gemini-3"):
+        if "flash" in model_name:
+            # Gemini 3 Flash can be toggled via thinkingLevel
+            thinking_level = (
+                "high" if context.scene.gemini_enable_thinking else "minimal"
+            )
+            data["generationConfig"]["thinkingConfig"] = {
+                "thinkingLevel": thinking_level
+            }
+        else:
+            # Gemini 3 Pro always uses high thinkingLevel
+            data["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "high"}
     elif model_name.startswith("gemini-2.5-"):
         if "pro" in model_name:
             # Gemini 2.5 Pro always thinks
@@ -1294,9 +1312,18 @@ You will be given a script that failed, its error, and a scene summary. Use all 
 
     # Configure thinking for Gemini models
     model_name = context.scene.gemini_model or ""
-    if model_name.startswith("gemini-3-pro"):
-        # Gemini 3 Pro always thinks and uses thinkingLevel
-        data["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "high"}
+    if model_name.startswith("gemini-3"):
+        if "flash" in model_name:
+            # Gemini 3 Flash can be toggled via thinkingLevel
+            thinking_level = (
+                "high" if context.scene.gemini_enable_thinking else "minimal"
+            )
+            data["generationConfig"]["thinkingConfig"] = {
+                "thinkingLevel": thinking_level
+            }
+        else:
+            # Gemini 3 Pro always uses high thinkingLevel
+            data["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "high"}
     elif model_name.startswith("gemini-2.5-"):
         if "pro" in model_name:
             # Gemini 2.5 Pro always thinks
