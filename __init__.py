@@ -389,7 +389,8 @@ class GEMINI_PT_Panel(bpy.types.Panel):
         column.prop(context.scene, "gemini_model", text="")
 
         # Conditionally show the 'Enable Thinking' toggle
-        if "gemini-2.5-flash" in context.scene.gemini_model:
+        model_name = context.scene.gemini_model
+        if "gemini-2.5-flash" in model_name or "gemini-3-flash" in model_name:
             column.prop(context.scene, "gemini_enable_thinking")
 
         column.label(text="Enter your message:")
