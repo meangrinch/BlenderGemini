@@ -62,6 +62,11 @@ def init_props():
         description="Select the Gemini model to use",
         items=[
             (
+                "gemini-3.1-pro-preview",
+                "Gemini 3.1 Pro Preview",
+                "Use Gemini 3.1 Pro Preview",
+            ),
+            (
                 "gemini-3-pro-preview",
                 "Gemini 3 Pro Preview",
                 "Use Gemini 3 Pro Preview",
