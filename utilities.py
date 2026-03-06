@@ -67,9 +67,9 @@ def init_props():
                 "Use Gemini 3.1 Pro Preview",
             ),
             (
-                "gemini-3-pro-preview",
-                "Gemini 3 Pro Preview",
-                "Use Gemini 3 Pro Preview",
+                "gemini-3.1-flash-lite-preview",
+                "Gemini 3.1 Flash Lite Preview",
+                "Use Gemini 3.1 Flash Lite Preview",
             ),
             (
                 "gemini-3-flash-preview",
@@ -77,11 +77,6 @@ def init_props():
                 "Use Gemini 3 Flash Preview",
             ),
             ("gemini-2.5-pro", "Gemini 2.5 Pro", "Use Gemini 2.5 Pro"),
-            (
-                "gemini-2.5-flash-preview-09-2025",
-                "Gemini 2.5 Flash Preview 09-2025",
-                "Use Gemini 2.5 Flash Preview 09-2025",
-            ),
             ("gemini-2.5-flash", "Gemini 2.5 Flash", "Use Gemini 2.5 Flash"),
             (
                 "gemini-2.5-flash-lite-preview-09-2025",
@@ -1327,7 +1322,7 @@ You will be given a script that failed, its error, and a scene summary. Use all 
                 "thinkingLevel": thinking_level
             }
         else:
-            # Gemini 3 Pro always uses high thinkingLevel
+            # Gemini 3.1 Pro always uses high thinkingLevel
             data["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "high"}
     elif model_name.startswith("gemini-2.5-"):
         if "pro" in model_name:
