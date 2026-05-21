@@ -9,20 +9,20 @@ if libs_path not in sys.path:
     sys.path.append(libs_path)
 
 from .utilities import (  # noqa: E402
+    apply_radial_shrink_fatten,
     clear_props,
+    ensure_subsurf_for_local_detail,
     fix_blender_code,
     generate_blender_code,
     get_api_key,
     get_detailed_object_data,
-    get_vertices_in_radius,
-    get_vertices_in_geodesic_radius,
-    init_props,
-    apply_radial_shrink_fatten,
-    split_area_to_text_editor,
-    raycast_surface,
-    project_point_to_surface_near,
-    ensure_subsurf_for_local_detail,
     get_local_geometry_patch_text,
+    get_vertices_in_geodesic_radius,
+    get_vertices_in_radius,
+    init_props,
+    project_point_to_surface_near,
+    raycast_surface,
+    split_area_to_text_editor,
 )
 
 bl_info = {
@@ -30,7 +30,7 @@ bl_info = {
     "blender": (3, 1, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 6, 4),
+    "version": (1, 7, 0),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini.",
     "wiki_url": "",
@@ -388,11 +388,10 @@ class GEMINI_PT_Panel(bpy.types.Panel):
         column.label(text="Gemini Model:")
         column.prop(context.scene, "gemini_model", text="")
 
-        # Conditionally show the 'Enable Thinking' toggle
         model_name = context.scene.gemini_model
-        if "gemini-2.5-flash" in model_name or (
-            model_name.startswith("gemini-3") and "flash" in model_name
-        ):
+        if model_name.startswith("gemini-3"):
+            column.prop(context.scene, "gemini_thinking_level")
+        elif "gemini-2.5-flash" in model_name:
             column.prop(context.scene, "gemini_enable_thinking")
 
         column.label(text="Enter your message:")
@@ -630,6 +629,12 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
         subtype="PASSWORD",
     )
 
+    enable_custom_sampling_parameters: bpy.props.BoolProperty(
+        name="Enable custom sampling parameters",
+        description="Send temperature, Top P, and Top K with Gemini requests",
+        default=False,
+    )
+
     temperature: bpy.props.FloatProperty(
         name="Temperature",
         description="Controls randomness: Lower values are more deterministic, higher values more creative",
@@ -673,9 +678,12 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
         layout.separator()
 
         layout.label(text="Generation Parameters:")
-        layout.prop(self, "temperature")
-        layout.prop(self, "top_p")
-        layout.prop(self, "top_k")
+        layout.prop(self, "enable_custom_sampling_parameters")
+        sampling_box = layout.box()
+        sampling_box.enabled = self.enable_custom_sampling_parameters
+        sampling_box.prop(self, "temperature")
+        sampling_box.prop(self, "top_p")
+        sampling_box.prop(self, "top_k")
 
         layout.separator()
 

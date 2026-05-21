@@ -62,14 +62,19 @@ def init_props():
         description="Select the Gemini model to use",
         items=[
             (
+                "gemini-3.5-flash",
+                "Gemini 3.5 Flash",
+                "Use Gemini 3.5 Flash",
+            ),
+            (
                 "gemini-3.1-pro-preview",
                 "Gemini 3.1 Pro Preview",
                 "Use Gemini 3.1 Pro Preview",
             ),
             (
-                "gemini-3.1-flash-lite-preview",
-                "Gemini 3.1 Flash Lite Preview",
-                "Use Gemini 3.1 Flash Lite Preview",
+                "gemini-3.1-flash-lite",
+                "Gemini 3.1 Flash Lite",
+                "Use Gemini 3.1 Flash Lite",
             ),
             (
                 "gemini-3-flash-preview",
@@ -88,14 +93,8 @@ def init_props():
                 "Gemini 2.5 Flash Lite",
                 "Use Gemini 2.5 Flash Lite",
             ),
-            ("gemini-2.0-flash", "Gemini 2.0 Flash", "Use Gemini 2.0 Flash"),
-            (
-                "gemini-2.0-flash-lite",
-                "Gemini 2.0 Flash Lite",
-                "Use Gemini 2.0 Flash Lite",
-            ),
         ],
-        default="gemini-3-flash-preview",
+        default="gemini-3.5-flash",
     )
     bpy.types.Scene.gemini_chat_input = bpy.props.StringProperty(
         name="Message",
@@ -110,6 +109,17 @@ def init_props():
         description="Enable model's thinking capabilities in the response (only for compatible models)",
         default=True,
     )
+    bpy.types.Scene.gemini_thinking_level = bpy.props.EnumProperty(
+        name="Thinking Level",
+        description="Select the thinking level for Gemini 3.x models",
+        items=[
+            ("minimal", "Minimal", "No thinking for instant responses"),
+            ("low", "Low", "Lighter thinking for faster responses"),
+            ("medium", "Medium", "Balanced thinking for most tasks"),
+            ("high", "High", "Deeper thinking for difficult tasks"),
+        ],
+        default="medium",
+    )
     bpy.types.Scene.gemini_enable_grounding = bpy.props.BoolProperty(
         name="Enable Grounding",
         description="Allow Gemini to use Google Search grounding for responses",
@@ -122,6 +132,7 @@ def clear_props():
     del bpy.types.Scene.gemini_chat_input
     del bpy.types.Scene.gemini_button_pressed
     del bpy.types.Scene.gemini_enable_thinking
+    del bpy.types.Scene.gemini_thinking_level
     del bpy.types.Scene.gemini_enable_grounding
 
 
@@ -1111,14 +1122,19 @@ def generate_blender_code(
         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
     ]
 
+    generation_config = {}
+    if getattr(addon_prefs, "enable_custom_sampling_parameters", False):
+        generation_config.update(
+            {
+                "temperature": addon_prefs.temperature,
+                "topP": addon_prefs.top_p,
+                "topK": addon_prefs.top_k,
+            }
+        )
+
     data = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
-        "generationConfig": {
-            "temperature": addon_prefs.temperature,
-            "topP": addon_prefs.top_p,
-            "topK": addon_prefs.top_k,
-        },
         "safetySettings": safety_settings_config,
     }
 
@@ -1132,25 +1148,20 @@ def generate_blender_code(
     # Configure thinking for Gemini models
     model_name = context.scene.gemini_model or ""
     if model_name.startswith("gemini-3"):
-        if "flash" in model_name:
-            # Gemini 3 Flash can be toggled via thinkingLevel
-            thinking_level = (
-                "high" if context.scene.gemini_enable_thinking else "minimal"
-            )
-            data["generationConfig"]["thinkingConfig"] = {
-                "thinkingLevel": thinking_level
-            }
-        else:
-            # Gemini 3 Pro always uses high thinkingLevel
-            data["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "high"}
+        generation_config["thinkingConfig"] = {
+            "thinkingLevel": getattr(context.scene, "gemini_thinking_level", "medium")
+        }
     elif model_name.startswith("gemini-2.5-"):
         if "pro" in model_name:
             # Gemini 2.5 Pro always thinks
-            data["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 32768}
+            generation_config["thinkingConfig"] = {"thinkingBudget": 32768}
         else:
             # Flash / Flash Lite can be toggled
             budget = 0 if not context.scene.gemini_enable_thinking else 24576
-            data["generationConfig"]["thinkingConfig"] = {"thinkingBudget": budget}
+            generation_config["thinkingConfig"] = {"thinkingBudget": budget}
+
+    if generation_config:
+        data["generationConfig"] = generation_config
 
     response_text = make_gemini_api_request(url, headers, data)
     if response_text:
@@ -1287,14 +1298,19 @@ You will be given a script that failed, its error, and a scene summary. Use all 
         if image_b64:
             parts.append({"inlineData": {"mimeType": "image/png", "data": image_b64}})
 
+    generation_config = {}
+    if getattr(addon_prefs, "enable_custom_sampling_parameters", False):
+        generation_config.update(
+            {
+                "temperature": addon_prefs.temperature,
+                "topP": addon_prefs.top_p,
+                "topK": addon_prefs.top_k,
+            }
+        )
+
     data = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {
-            "temperature": addon_prefs.temperature,
-            "topP": addon_prefs.top_p,
-            "topK": addon_prefs.top_k,
-        },
         "safetySettings": [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -1313,25 +1329,20 @@ You will be given a script that failed, its error, and a scene summary. Use all 
     # Configure thinking for Gemini models
     model_name = context.scene.gemini_model or ""
     if model_name.startswith("gemini-3"):
-        if "flash" in model_name:
-            # Gemini 3 Flash can be toggled via thinkingLevel
-            thinking_level = (
-                "high" if context.scene.gemini_enable_thinking else "minimal"
-            )
-            data["generationConfig"]["thinkingConfig"] = {
-                "thinkingLevel": thinking_level
-            }
-        else:
-            # Gemini 3.1 Pro always uses high thinkingLevel
-            data["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "high"}
+        generation_config["thinkingConfig"] = {
+            "thinkingLevel": getattr(context.scene, "gemini_thinking_level", "medium")
+        }
     elif model_name.startswith("gemini-2.5-"):
         if "pro" in model_name:
             # Gemini 2.5 Pro always thinks
-            data["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 32768}
+            generation_config["thinkingConfig"] = {"thinkingBudget": 32768}
         else:
             # Flash / Flash Lite can be toggled
             budget = 0 if not context.scene.gemini_enable_thinking else 32768
-            data["generationConfig"]["thinkingConfig"] = {"thinkingBudget": budget}
+            generation_config["thinkingConfig"] = {"thinkingBudget": budget}
+
+    if generation_config:
+        data["generationConfig"] = generation_config
 
     response_text = make_gemini_api_request(url, headers, data)
     if response_text:
