@@ -246,22 +246,70 @@ def capture_viewport_screenshot_base64(context, max_size=1024):
 
 def get_scene_objects_as_text(context):
     """
-    Scans the current Blender scene and returns a text summary of the visible objects.
+    Scans the current Blender scene and returns a compact context summary.
     This helps the AI understand the current state of the scene.
     """
-    objects = [obj for obj in context.scene.objects if obj.visible_get()]
-    if not objects:
-        return "The current scene contains no visible objects."
+    def _format_vec(vec):
+        try:
+            return f"({vec.x:.4f}, {vec.y:.4f}, {vec.z:.4f})"
+        except Exception:
+            return "unknown"
 
-    scene_summary = "Visible Scene Objects:\n"
+    def _visible_label(obj):
+        try:
+            return str(bool(obj.visible_get()))
+        except Exception:
+            return "unknown"
+
+    def _selected_label(obj):
+        try:
+            return str(bool(obj.select_get()))
+        except Exception:
+            return "unknown"
+
+    objects = list(context.scene.objects)
+    active_obj = getattr(context.view_layer.objects, "active", None)
+    selected_objects = list(getattr(context, "selected_objects", []))
+    selected_names = [obj.name for obj in selected_objects]
+
+    lines = ["Scene State:"]
+    if active_obj is not None:
+        active_mode = getattr(active_obj, "mode", "UNKNOWN")
+        lines.append(f"- Active Object: `{active_obj.name}` (mode={active_mode})")
+    else:
+        lines.append("- Active Object: None")
+    if selected_names:
+        selected_text = ", ".join(f"`{name}`" for name in selected_names)
+        lines.append("- Selected Objects: " + selected_text)
+    else:
+        lines.append("- Selected Objects: None")
+
+    lines.append("")
+    lines.append("Scene Objects:")
+    if not objects:
+        lines.append("- None")
+        return "\n".join(lines)
+
     for obj in objects:
-        scene_summary += f"- Object Name: `{obj.name}`, Type: `{obj.type}`"
+        mode = getattr(obj, "mode", "UNKNOWN")
+        parts = [
+            f"- `{obj.name}`",
+            f"type={obj.type}",
+            f"visible={_visible_label(obj)}",
+            f"selected={_selected_label(obj)}",
+            f"active={obj == active_obj}",
+            f"mode={mode}",
+            f"location={_format_vec(obj.location)}",
+        ]
         if obj.type == "MESH":
-            scene_summary += (
-                f", Vertices: {len(obj.data.vertices)}, Faces: {len(obj.data.polygons)}"
+            parts.extend(
+                [
+                    f"vertices={len(obj.data.vertices)}",
+                    f"faces={len(obj.data.polygons)}",
+                ]
             )
-        scene_summary += f", Location: {obj.location}\n"
-    return scene_summary
+        lines.append(", ".join(parts))
+    return "\n".join(lines)
 
 
 def get_blender_version_string():
@@ -278,56 +326,6 @@ def get_blender_version_string():
     except Exception:
         pass
     return "Unknown"
-
-
-def _summarize_objects_near_cursor(context, max_count=3):
-    """
-    Return a short text list of the nearest visible objects to the 3D cursor.
-    Uses object world positions and bounding box corners for a simple proximity metric.
-    """
-    try:
-        cursor_loc = context.scene.cursor.location
-    except Exception:
-        return "None"
-
-    candidates = []
-    for obj in context.scene.objects:
-        try:
-            if not obj.visible_get():
-                continue
-        except Exception:
-            continue
-
-        try:
-            center = obj.matrix_world.to_translation()
-            center_dist = (center - cursor_loc).length
-
-            # Prefer a closer bounding-box corner if available (for large objects)
-            min_corner_dist = center_dist
-            if getattr(obj, "bound_box", None):
-                try:
-                    min_corner_dist = min(
-                        (
-                            obj.matrix_world @ mathutils.Vector(corner) - cursor_loc
-                        ).length
-                        for corner in obj.bound_box
-                    )
-                except Exception:
-                    pass
-
-            proximity = min(center_dist, min_corner_dist)
-            candidates.append((proximity, obj))
-        except Exception:
-            continue
-
-    if not candidates:
-        return "None"
-
-    candidates.sort(key=lambda item: item[0])
-    lines = []
-    for dist, obj in candidates[: max_count if max_count and max_count > 0 else 3]:
-        lines.append(f"- `{obj.name}` (Type: {obj.type}) — Distance: {dist:.4f}")
-    return "\n".join(lines)
 
 
 def _get_nearest_objects_json(context, max_count=3):
@@ -1029,7 +1027,7 @@ def generate_blender_code(
     prompt,
     chat_history,
     context,
-    system_prompt,
+    generation_system_prompt,
     detailed_geometry=None,
     use_3d_cursor=False,
     include_viewport_screenshot=False,
@@ -1133,7 +1131,7 @@ def generate_blender_code(
         )
 
     data = {
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "systemInstruction": {"parts": [{"text": generation_system_prompt}]},
         "contents": contents,
         "safetySettings": safety_settings_config,
     }
@@ -1177,7 +1175,7 @@ def fix_blender_code(
     original_code,
     error_message,
     context,
-    system_prompt,
+    repair_system_prompt,
     detailed_geometry=None,
     use_3d_cursor=False,
     include_viewport_screenshot=False,
@@ -1250,12 +1248,9 @@ Attached below. Use it to infer view orientation and selection state, and to und
 
     blender_version = get_blender_version_string()
 
-    fix_prompt = f"""### Persona
-You are a `bpy` Debugging Specialist. Your sole function is to analyze the provided faulty Python script and its corresponding error message, and then generate a corrected, fully functional version.
-
-### Task Context
+    fix_prompt = f"""### Repair Context
 Environment: Blender {blender_version}
-You will be given a script that failed, its error, and a scene summary. Use all of this information to provide a fix.
+Use the failed script, traceback, scene summary, and optional context below to produce the complete corrected script.
 {detailed_geo_block}
 {cursor_block}
 {screenshot_block}
@@ -1273,24 +1268,7 @@ You will be given a script that failed, its error, and a scene summary. Use all 
 **[ERROR TRACEBACK]:**
 ```
 {error_message}
-```
-
-### Core Directives for Correction
-
-1.  **Root Cause Analysis:** Your first step is to perform a root cause analysis. Meticulously trace the error from the `[ERROR TRACEBACK]` to the specific line and function call in the `[FAULTY SCRIPT]`. Understand *why* the error occurred (e.g., incorrect parameter, wrong object type, context issue).
-
-2.  **Surgical Correction:** The goal is precision. Make the minimum necessary changes to the code to resolve the error. Avoid refactoring or altering code that is unrelated to the bug.
-
-3.  **Preserve Original Intent:** The corrected script **must** achieve the exact same outcome that the `[FAULTY SCRIPT]` was intended for. Do not remove or comment out functionality to bypass the error; fix the underlying issue.
-
-4.  **Maintain Coding Standards:** The fix must adhere to `bpy` best practices.
-    -   **API Preference:** Use the Data API (`bpy.data`) over the Operator API (`bpy.ops`) for property modifications.
-    -   **Parameter Integrity:** Ensure all function/operator parameters are valid and exist in the API. Do not invent arguments. This is a common source of errors.
-
-5.  **Strict Output Mandate:**
-    -   Your response **MUST** be only the complete, corrected, and executable Python script.
-    -   Enclose the entire script in a single Python code block.
-    -   **DO NOT** include any conversational text, explanations, summaries of changes, or apologies. Your output will be executed directly."""  # noqa
+```"""  # noqa
 
     parts = [{"text": fix_prompt}]
     if include_viewport_screenshot:
@@ -1309,7 +1287,7 @@ You will be given a script that failed, its error, and a scene summary. Use all 
         )
 
     data = {
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "systemInstruction": {"parts": [{"text": repair_system_prompt}]},
         "contents": [{"role": "user", "parts": parts}],
         "safetySettings": [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
