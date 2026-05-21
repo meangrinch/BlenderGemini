@@ -12,6 +12,10 @@ import bpy
 import mathutils
 import requests
 
+GEMINI_INTERACTIONS_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/interactions"
+)
+
 
 def get_api_key(context, addon_name):
     preferences = context.preferences
@@ -102,8 +106,13 @@ def init_props():
         default="",
     )
     bpy.types.Scene.gemini_button_pressed = bpy.props.BoolProperty(default=False)
+    bpy.types.Scene.gemini_previous_interaction_id = bpy.props.StringProperty(
+        name="Previous Interaction ID",
+        default="",
+    )
     bpy.types.PropertyGroup.type = bpy.props.StringProperty()
     bpy.types.PropertyGroup.content = bpy.props.StringProperty()
+    bpy.types.PropertyGroup.interaction_id = bpy.props.StringProperty(default="")
     bpy.types.Scene.gemini_enable_thinking = bpy.props.BoolProperty(
         name="Enable Thinking",
         description="Enable model's thinking capabilities in the response (only for compatible models)",
@@ -131,9 +140,142 @@ def clear_props():
     del bpy.types.Scene.gemini_chat_history
     del bpy.types.Scene.gemini_chat_input
     del bpy.types.Scene.gemini_button_pressed
+    del bpy.types.Scene.gemini_previous_interaction_id
     del bpy.types.Scene.gemini_enable_thinking
     del bpy.types.Scene.gemini_thinking_level
     del bpy.types.Scene.gemini_enable_grounding
+
+
+def _build_interaction_input_parts(text, image_b64=None):
+    parts = [{"type": "text", "text": text}]
+    if image_b64:
+        parts.append({"type": "image", "mime_type": "image/png", "data": image_b64})
+    return parts
+
+
+def _build_interaction_generation_config(context, addon_prefs):
+    generation_config = {}
+    if getattr(addon_prefs, "enable_custom_sampling_parameters", False):
+        generation_config.update(
+            {
+                "temperature": addon_prefs.temperature,
+                "top_p": addon_prefs.top_p,
+            }
+        )
+
+    model_name = getattr(context.scene, "gemini_model", "") or ""
+    if model_name.startswith("gemini-3"):
+        generation_config["thinking_level"] = getattr(
+            context.scene, "gemini_thinking_level", "medium"
+        )
+    elif model_name.startswith("gemini-2.5-"):
+        if "pro" in model_name:
+            generation_config["thinking_level"] = "high"
+        else:
+            generation_config["thinking_level"] = (
+                "high"
+                if getattr(context.scene, "gemini_enable_thinking", True)
+                else "minimal"
+            )
+
+    return generation_config
+
+
+def _build_interaction_request_data(
+    model,
+    input_parts,
+    system_instruction,
+    generation_config=None,
+    previous_interaction_id="",
+    enable_grounding=False,
+):
+    data = {
+        "model": model,
+        "input": input_parts,
+        "system_instruction": system_instruction,
+    }
+    if generation_config:
+        data["generation_config"] = generation_config
+    if previous_interaction_id:
+        data["previous_interaction_id"] = previous_interaction_id
+    if enable_grounding:
+        data["tools"] = [{"type": "google_search"}]
+    return data
+
+
+def _extract_text_blocks(content):
+    if not isinstance(content, list):
+        return []
+
+    return [
+        item["text"]
+        for item in content
+        if isinstance(item, dict)
+        and item.get("type") == "text"
+        and isinstance(item.get("text"), str)
+    ]
+
+
+def _extract_interaction_output_text_from_steps(steps):
+    if not isinstance(steps, list):
+        raise ValueError("Interaction steps field is not a list.")
+
+    for step in reversed(steps):
+        if not isinstance(step, dict) or step.get("type") != "model_output":
+            continue
+
+        texts = _extract_text_blocks(step.get("content"))
+        if texts:
+            return "".join(texts)
+        raise ValueError("Model output step contained no text.")
+
+    raise ValueError("Interaction response is missing a model output step.")
+
+
+def _extract_interaction_output_text_from_outputs(outputs):
+    if not isinstance(outputs, list):
+        raise ValueError("Interaction outputs field is not a list.")
+
+    for output in reversed(outputs):
+        if not isinstance(output, dict):
+            continue
+        if output.get("type") == "text" and isinstance(output.get("text"), str):
+            return output["text"]
+
+        texts = _extract_text_blocks(output.get("content"))
+        if texts:
+            return "".join(texts)
+
+    raise ValueError("Interaction response is missing a text output.")
+
+
+def _extract_interaction_output_text(response_data):
+    status = response_data.get("status")
+    if status == "requires_action":
+        raise ValueError(
+            "Interaction requires tool action, but no tools are configured."
+        )
+    if status and status != "completed":
+        raise ValueError(f"Interaction did not complete: {status}")
+
+    if "outputs" in response_data:
+        return _extract_interaction_output_text_from_outputs(
+            response_data.get("outputs")
+        )
+    if isinstance(response_data.get("output_text"), str):
+        return response_data["output_text"]
+    if "steps" in response_data:
+        return _extract_interaction_output_text_from_steps(response_data.get("steps"))
+
+    keys = ", ".join(sorted(response_data.keys()))
+    raise ValueError(f"Interaction response has no text output field. Keys: {keys}")
+
+
+def _extract_code_from_response_text(response_text):
+    code_match = re.search(r"```(?:python)?(.*?)```", response_text, re.DOTALL)
+    if code_match:
+        return code_match.group(1).strip()
+    return response_text.strip()
 
 
 def make_gemini_api_request(url, headers, data):
@@ -147,13 +289,29 @@ def make_gemini_api_request(url, headers, data):
             response = requests.post(url, headers=headers, json=data)
             response.raise_for_status()
 
-            return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+            response_data = response.json()
+            interaction_id = response_data.get("id")
+            if not interaction_id:
+                raise ValueError("Interaction response is missing an id.")
+            return {
+                "text": _extract_interaction_output_text(response_data),
+                "interaction_id": interaction_id,
+            }
 
         except requests.exceptions.RequestException as e:
             error_msg = (
                 f"API request failed (attempt {attempt + 1}/{max_retries}): {str(e)}"
             )
             print(error_msg)
+
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            if (
+                status_code is not None
+                and 400 <= status_code < 500
+                and status_code != 429
+            ):
+                print("Non-retryable client error. Giving up.")
+                return None
 
             if attempt < max_retries - 1:
                 current_wait = min(wait_time * (2**attempt), max_wait_time)
@@ -162,7 +320,7 @@ def make_gemini_api_request(url, headers, data):
             else:
                 print("Maximum retry attempts reached. Giving up.")
                 return None
-        except (KeyError, IndexError) as e:
+        except (KeyError, IndexError, TypeError, ValueError) as e:
             print(f"Error parsing API response: {str(e)}")
             return None
 
@@ -249,6 +407,7 @@ def get_scene_objects_as_text(context):
     Scans the current Blender scene and returns a compact context summary.
     This helps the AI understand the current state of the scene.
     """
+
     def _format_vec(vec):
         try:
             return f"({vec.x:.4f}, {vec.y:.4f}, {vec.z:.4f})"
@@ -1032,27 +1191,15 @@ def generate_blender_code(
     use_3d_cursor=False,
     include_viewport_screenshot=False,
 ):
-    api_key = get_api_key(context, "BlenderGemini")
+    api_key = get_api_key(context, "BlenderGemini") or os.getenv("GEMINI_API_KEY")
 
     preferences = context.preferences
     addon_prefs = preferences.addons["BlenderGemini"].preferences
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        + context.scene.gemini_model
-        + ":generateContent"
-    )
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
-
-    contents = []
-    for message in chat_history[-10:]:  # Keep last 10 messages for context
-        role = "user" if message.type == "user" else "model"
-        content = (
-            message.content
-            if message.type == "user"
-            else "```\n" + message.content + "\n```"
-        )
-        contents.append({"role": role, "parts": [{"text": content}]})
+    previous_interaction_id = getattr(
+        context.scene, "gemini_previous_interaction_id", ""
+    )
 
     scene_context = get_scene_objects_as_text(context)
     full_prompt = ""
@@ -1103,71 +1250,32 @@ def generate_blender_code(
         "**Scene Summary:**\n" + scene_context + "\n\nUser Request: " + prompt
     )
 
-    user_parts = [{"text": full_prompt}]
+    image_b64 = None
     if include_viewport_screenshot:
         image_b64 = capture_viewport_screenshot_base64(context)
-        if image_b64:
-            user_parts.append(
-                {"inlineData": {"mimeType": "image/png", "data": image_b64}}
-            )
 
-    contents.append({"role": "user", "parts": user_parts})
+    generation_config = _build_interaction_generation_config(context, addon_prefs)
 
-    safety_settings_config = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ]
-
-    generation_config = {}
-    if getattr(addon_prefs, "enable_custom_sampling_parameters", False):
-        generation_config.update(
-            {
-                "temperature": addon_prefs.temperature,
-                "topP": addon_prefs.top_p,
-                "topK": addon_prefs.top_k,
-            }
-        )
-
-    data = {
-        "systemInstruction": {"parts": [{"text": generation_system_prompt}]},
-        "contents": contents,
-        "safetySettings": safety_settings_config,
-    }
-
-    # Optionally enable Google Search grounding
     try:
-        if getattr(context.scene, "gemini_enable_grounding", False):
-            data["tools"] = [{"googleSearch": {}}]
+        enable_grounding = getattr(context.scene, "gemini_enable_grounding", False)
     except Exception:
-        pass
+        enable_grounding = False
 
-    # Configure thinking for Gemini models
-    model_name = context.scene.gemini_model or ""
-    if model_name.startswith("gemini-3"):
-        generation_config["thinkingConfig"] = {
-            "thinkingLevel": getattr(context.scene, "gemini_thinking_level", "medium")
+    data = _build_interaction_request_data(
+        context.scene.gemini_model,
+        _build_interaction_input_parts(full_prompt, image_b64),
+        generation_system_prompt,
+        generation_config=generation_config,
+        previous_interaction_id=previous_interaction_id,
+        enable_grounding=enable_grounding,
+    )
+
+    response = make_gemini_api_request(GEMINI_INTERACTIONS_URL, headers, data)
+    if response:
+        return {
+            "code": _extract_code_from_response_text(response["text"]),
+            "interaction_id": response["interaction_id"],
         }
-    elif model_name.startswith("gemini-2.5-"):
-        if "pro" in model_name:
-            # Gemini 2.5 Pro always thinks
-            generation_config["thinkingConfig"] = {"thinkingBudget": 32768}
-        else:
-            # Flash / Flash Lite can be toggled
-            budget = 0 if not context.scene.gemini_enable_thinking else 24576
-            generation_config["thinkingConfig"] = {"thinkingBudget": budget}
-
-    if generation_config:
-        data["generationConfig"] = generation_config
-
-    response_text = make_gemini_api_request(url, headers, data)
-    if response_text:
-        # Extract code between ```python and ``` markers
-        code_match = re.search(r"```(?:python)?(.*?)```", response_text, re.DOTALL)
-        if code_match:
-            return code_match.group(1).strip()
-        return response_text.strip()
     return None
 
 
@@ -1179,18 +1287,14 @@ def fix_blender_code(
     detailed_geometry=None,
     use_3d_cursor=False,
     include_viewport_screenshot=False,
+    previous_interaction_id="",
 ):
     """Generate fixed Blender code based on the error message."""
-    api_key = get_api_key(context, "BlenderGemini")
+    api_key = get_api_key(context, "BlenderGemini") or os.getenv("GEMINI_API_KEY")
 
     preferences = context.preferences
     addon_prefs = preferences.addons["BlenderGemini"].preferences
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        + context.scene.gemini_model
-        + ":generateContent"
-    )
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
 
     scene_context = get_scene_objects_as_text(context)
@@ -1270,65 +1374,37 @@ Use the failed script, traceback, scene summary, and optional context below to p
 {error_message}
 ```"""  # noqa
 
-    parts = [{"text": fix_prompt}]
+    image_b64 = None
     if include_viewport_screenshot:
         image_b64 = capture_viewport_screenshot_base64(context)
-        if image_b64:
-            parts.append({"inlineData": {"mimeType": "image/png", "data": image_b64}})
 
-    generation_config = {}
-    if getattr(addon_prefs, "enable_custom_sampling_parameters", False):
-        generation_config.update(
-            {
-                "temperature": addon_prefs.temperature,
-                "topP": addon_prefs.top_p,
-                "topK": addon_prefs.top_k,
-            }
+    generation_config = _build_interaction_generation_config(context, addon_prefs)
+
+    try:
+        enable_grounding = getattr(context.scene, "gemini_enable_grounding", False)
+    except Exception:
+        enable_grounding = False
+
+    if not previous_interaction_id:
+        previous_interaction_id = getattr(
+            context.scene, "gemini_previous_interaction_id", ""
         )
 
-    data = {
-        "systemInstruction": {"parts": [{"text": repair_system_prompt}]},
-        "contents": [{"role": "user", "parts": parts}],
-        "safetySettings": [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ],
-    }
+    data = _build_interaction_request_data(
+        context.scene.gemini_model,
+        _build_interaction_input_parts(fix_prompt, image_b64),
+        repair_system_prompt,
+        generation_config=generation_config,
+        previous_interaction_id=previous_interaction_id,
+        enable_grounding=enable_grounding,
+    )
 
-    # Optionally enable Google Search grounding
-    try:
-        if getattr(context.scene, "gemini_enable_grounding", False):
-            data["tools"] = [{"googleSearch": {}}]
-    except Exception:
-        pass
-
-    # Configure thinking for Gemini models
-    model_name = context.scene.gemini_model or ""
-    if model_name.startswith("gemini-3"):
-        generation_config["thinkingConfig"] = {
-            "thinkingLevel": getattr(context.scene, "gemini_thinking_level", "medium")
+    response = make_gemini_api_request(GEMINI_INTERACTIONS_URL, headers, data)
+    if response:
+        return {
+            "code": _extract_code_from_response_text(response["text"]),
+            "interaction_id": response["interaction_id"],
         }
-    elif model_name.startswith("gemini-2.5-"):
-        if "pro" in model_name:
-            # Gemini 2.5 Pro always thinks
-            generation_config["thinkingConfig"] = {"thinkingBudget": 32768}
-        else:
-            # Flash / Flash Lite can be toggled
-            budget = 0 if not context.scene.gemini_enable_thinking else 32768
-            generation_config["thinkingConfig"] = {"thinkingBudget": budget}
-
-    if generation_config:
-        data["generationConfig"] = generation_config
-
-    response_text = make_gemini_api_request(url, headers, data)
-    if response_text:
-        # Extract code between ```python and ``` markers
-        code_match = re.search(r"```(?:python)?(.*?)```", response_text, re.DOTALL)
-        if code_match:
-            return code_match.group(1).strip()
-        return response_text.strip()
     return None
 
 

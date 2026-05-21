@@ -68,6 +68,30 @@ def _make_namespace(context):
     }
 
 
+def _add_chat_message(scene, message_type, content, interaction_id=""):
+    message = scene.gemini_chat_history.add()
+    message.type = message_type
+    message.content = content
+    message.interaction_id = interaction_id or ""
+    return message
+
+
+def _reset_previous_interaction_id_from_history(scene):
+    scene.gemini_previous_interaction_id = ""
+    for index in range(len(scene.gemini_chat_history) - 1, -1, -1):
+        message = scene.gemini_chat_history[index]
+        if message.type == "assistant" and message.interaction_id:
+            scene.gemini_previous_interaction_id = message.interaction_id
+            break
+
+
+def _commit_successful_turn(scene, user_input, assistant_code, interaction_id):
+    _add_chat_message(scene, "user", user_input)
+    _add_chat_message(scene, "assistant", assistant_code, interaction_id)
+    scene.gemini_previous_interaction_id = interaction_id or ""
+    scene.gemini_chat_input = ""
+
+
 generation_system_prompt = """### Persona
 You are `BlenderGemini`, a specialized AI assistant integrated directly into Blender's scripting environment. Your purpose is to translate user requests into clean, efficient, robust `bpy` Python scripts that operate on the current Blender scene.
 
@@ -77,7 +101,6 @@ You are `BlenderGemini`, a specialized AI assistant integrated directly into Ble
 - Optionally, you may be given detailed geometry for the currently selected object. Use it for high-precision mesh edits.
 - Optionally, a screenshot of the 3D Viewport may be attached. Use it for selection state, viewport orientation, and visible context, but do not rely on it for exact coordinates.
 - The current scene is the cumulative result of previously executed scripts in this conversation.
-- You have access to recent chat history, not necessarily the full project history.
 
 ### Output Contract
 1. Your response must be a single executable Python script enclosed in one markdown `python` code block.
@@ -93,7 +116,7 @@ You are `BlenderGemini`, a specialized AI assistant integrated directly into Ble
 - If Google Search grounding is enabled, it may inform Blender/API facts or user-requested factual support, but the script you produce must not perform web access.
 
 ### Scene Interaction Strategy
-First analyze the scene summary and recent chat history, then choose the appropriate action.
+First analyze the scene summary and current user request, then choose the appropriate action.
 - Modification: If the request refines existing objects, reference those objects and modify them directly. Do not recreate them.
 - Replacement: If the request replaces objects from a previous step, explicitly delete the old objects before creating the replacement.
 - Addition: If the request adds new objects, create them without altering existing objects unless specified.
@@ -264,7 +287,22 @@ class GEMINI_OT_DeleteMessage(bpy.types.Operator):
     message_index: bpy.props.IntProperty()
 
     def execute(self, context):
-        context.scene.gemini_chat_history.remove(self.message_index)
+        chat_history = context.scene.gemini_chat_history
+        if self.message_index < 0 or self.message_index >= len(chat_history):
+            return {"FINISHED"}
+
+        start_index = self.message_index
+        if (
+            0 < self.message_index < len(chat_history)
+            and chat_history[self.message_index].type == "assistant"
+            and chat_history[self.message_index - 1].type == "user"
+        ):
+            start_index = self.message_index - 1
+
+        while len(chat_history) > start_index:
+            chat_history.remove(start_index)
+
+        _reset_previous_interaction_id_from_history(context.scene)
         return {"FINISHED"}
 
 
@@ -458,6 +496,7 @@ class GEMINI_OT_ClearChat(bpy.types.Operator):
 
     def execute(self, context):
         context.scene.gemini_chat_history.clear()
+        context.scene.gemini_previous_interaction_id = ""
         return {"FINISHED"}
 
 
@@ -467,6 +506,7 @@ class GEMINI_OT_Execute(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
+        user_input = context.scene.gemini_chat_input
         api_key = get_api_key(context, __name__)
         if not api_key:
             api_key = os.getenv("GEMINI_API_KEY")
@@ -493,8 +533,8 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                 detailed_geometry = get_detailed_object_data(active_obj)
         use_3d_cursor = context.scene.gemini_use_3d_cursor
 
-        blender_code = generate_blender_code(
-            context.scene.gemini_chat_input,
+        generation_result = generate_blender_code(
+            user_input,
             context.scene.gemini_chat_history,
             context,
             generation_system_prompt,
@@ -503,27 +543,23 @@ class GEMINI_OT_Execute(bpy.types.Operator):
             include_viewport_screenshot=context.scene.gemini_include_viewport_screenshot,
         )
 
-        message = context.scene.gemini_chat_history.add()
-        message.type = "user"
-        message.content = context.scene.gemini_chat_input
-
-        context.scene.gemini_chat_input = ""
-
-        if blender_code:
+        if generation_result and generation_result.get("code"):
+            blender_code = generation_result["code"]
+            generation_interaction_id = generation_result.get("interaction_id", "")
             objects_before = set(bpy.data.objects)
             materials_before = set(bpy.data.materials)
 
-            history_index = len(context.scene.gemini_chat_history)
-            message = context.scene.gemini_chat_history.add()
-            message.type = "assistant"
-            message.content = blender_code
-
-            # Ensure a neutral mode before executing arbitrary code
             _ensure_object_mode()
             namespace = _make_namespace(context)
 
             try:
                 exec(blender_code, namespace)
+                _commit_successful_turn(
+                    context.scene,
+                    user_input,
+                    blender_code,
+                    generation_interaction_id,
+                )
             except Exception as e:
                 if max_fix_attempts <= 0:
                     self.report(
@@ -539,8 +575,6 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                     f"Original code had an error. Attempting to fix (1/{max_fix_attempts})...",
                 )
 
-                context.scene.gemini_chat_history.remove(history_index)
-
                 objects_after = set(bpy.data.objects)
                 materials_after = set(bpy.data.materials)
 
@@ -555,9 +589,10 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                 current_code = blender_code
                 current_error = error_message
                 current_detailed_geometry = detailed_geometry
+                repair_previous_interaction_id = generation_interaction_id
 
                 for attempt in range(1, max_fix_attempts + 1):
-                    fixed_code = fix_blender_code(
+                    fix_result = fix_blender_code(
                         current_code,
                         current_error,
                         context,
@@ -565,9 +600,10 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                         detailed_geometry=current_detailed_geometry,
                         use_3d_cursor=use_3d_cursor,
                         include_viewport_screenshot=context.scene.gemini_include_viewport_screenshot,
+                        previous_interaction_id=repair_previous_interaction_id,
                     )
 
-                    if not fixed_code:
+                    if not fix_result or not fix_result.get("code"):
                         self.report(
                             {"ERROR"},
                             f"Could not fix the code on attempt {attempt}: {current_error}",
@@ -575,10 +611,11 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                         context.scene.gemini_button_pressed = False
                         return {"CANCELLED"}
 
-                    fix_history_index = len(context.scene.gemini_chat_history)
-                    message = context.scene.gemini_chat_history.add()
-                    message.type = "assistant"
-                    message.content = fixed_code
+                    fixed_code = fix_result["code"]
+                    fix_interaction_id = fix_result.get("interaction_id", "")
+                    repair_previous_interaction_id = (
+                        fix_interaction_id or repair_previous_interaction_id
+                    )
 
                     try:
                         _ensure_object_mode()
@@ -587,6 +624,12 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                         self.report(
                             {"INFO"},
                             f"Code fixed and executed successfully on attempt {attempt}!",
+                        )
+                        _commit_successful_turn(
+                            context.scene,
+                            user_input,
+                            fixed_code,
+                            fix_interaction_id,
                         )
                         break
                     except Exception as e2:
@@ -600,8 +643,6 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                                     f"({attempt + 1}/{max_fix_attempts})..."
                                 ),
                             )
-
-                            context.scene.gemini_chat_history.remove(fix_history_index)
 
                             objects_after_fix = set(bpy.data.objects)
                             materials_after_fix = set(bpy.data.materials)
@@ -651,7 +692,7 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
 
     enable_custom_sampling_parameters: bpy.props.BoolProperty(
         name="Enable custom sampling parameters",
-        description="Send temperature, Top P, and Top K with Gemini requests",
+        description="Send temperature and Top P with Gemini requests",
         default=False,
     )
 
@@ -675,14 +716,6 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
         step=5,
     )
 
-    top_k: bpy.props.IntProperty(
-        name="Top K",
-        description="Limits token selection to the K most likely tokens",
-        default=64,
-        min=0,
-        max=64,
-    )
-
     max_fix_attempts: bpy.props.IntProperty(
         name="Max Fix Attempts",
         description="Maximum number of times to attempt fixing code errors (0 = don't attempt fixes)",
@@ -703,7 +736,6 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
         sampling_box.enabled = self.enable_custom_sampling_parameters
         sampling_box.prop(self, "temperature")
         sampling_box.prop(self, "top_p")
-        sampling_box.prop(self, "top_k")
 
         layout.separator()
 
