@@ -9,6 +9,7 @@ if libs_path not in sys.path:
     sys.path.append(libs_path)
 
 from .utilities import (  # noqa: E402
+    GEMINI_ChatMessage,
     apply_radial_shrink_fatten,
     clear_props,
     ensure_subsurf_for_local_detail,
@@ -30,7 +31,7 @@ bl_info = {
     "blender": (3, 1, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 7, 0),
+    "version": (1, 7, 1),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini.",
     "wiki_url": "",
@@ -131,7 +132,8 @@ First analyze the scene summary and current user request, then choose the approp
 - Prefer the direct Data API (`bpy.data`) for property changes. Use `bpy.ops` mainly for object creation, mode switching, and operations with no direct data equivalent.
 - Prefer non-destructive methods like modifiers. Avoid Edit Mode unless specific mesh components must be edited.
 - Assign descriptive names to new objects and materials.
-- For Principled BSDF inputs, check that each input exists before setting version-sensitive fields such as `IOR`, `Specular IOR Level`, `Metallic`, or `Roughness`.
+- New materials already have a node tree; use `mat.node_tree` and Principled BSDF inputs directly. Do not set `use_nodes`. Check that each input exists before setting fields such as `IOR`, `Specular IOR Level`, `Metallic`, or `Roughness`.
+- Compositor graphs use `scene.compositing_node_group`. Geometry Nodes modifier inputs use `modifier.properties.inputs.<identifier>.value` (not custom-property assignment). Animation F-Curves go through action slots / channelbags via `bpy_extras.anim_utils`.
 - When preserving a child's world transform during parenting, assign `child.parent = parent`, then set `child.matrix_parent_inverse = parent.matrix_world.inverted()`.
 - Apply visual polishing like `shade_smooth` only when adding geometric detail or when the user's request implies a final visual touch-up.
 
@@ -205,7 +207,6 @@ if sphere_obj is None:
     sphere_obj.name = "MetallicRedSphere"
 
 mat_sphere = bpy.data.materials.new(name="RedMetallicMaterial")
-mat_sphere.use_nodes = True
 bsdf_sphere = mat_sphere.node_tree.nodes.get("Principled BSDF")
 if bsdf_sphere:
     set_node_input(bsdf_sphere, "Base Color", (0.8, 0.0, 0.0, 1.0))
@@ -226,7 +227,6 @@ cube_obj = bpy.context.object
 cube_obj.name = "GreenBeveledChildCube"
 
 mat_cube = bpy.data.materials.new(name="GreenPlasticMaterial")
-mat_cube.use_nodes = True
 bsdf_cube = mat_cube.node_tree.nodes.get("Principled BSDF")
 if bsdf_cube:
     set_node_input(bsdf_cube, "Base Color", (0.0, 0.8, 0.0, 1.0))
@@ -266,7 +266,8 @@ You are `BlenderGemini Repair`, a focused `bpy` debugging specialist integrated 
 - Do not remove functionality just to bypass the error.
 - Keep the same scene interaction strategy unless the traceback proves it is invalid.
 - Prefer `bpy.data` for property changes and `bpy.ops` only where operator context is required.
-- Check that operator parameters and node inputs exist before using version-sensitive API fields.
+- Check that operator parameters and node inputs exist before using them.
+- New materials already have a node tree; use `mat.node_tree` directly and do not set `use_nodes`.
 - If selection or active-object context matters, capture it before changing mode or selection.
 - When preserving a child's world transform during parenting, assign `child.parent = parent`, then set `child.matrix_parent_inverse = parent.matrix_world.inverted()`.
 
@@ -744,6 +745,7 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
 
 
 classes = [
+    GEMINI_ChatMessage,
     GEMINI_AddonPreferences,
     GEMINI_OT_DeleteMessage,
     GEMINI_OT_Execute,
@@ -782,14 +784,15 @@ def register():
 
 
 def unregister():
-    for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
-
+    # Drop scene properties that reference registered classes before unregistering them.
     del bpy.types.Scene.gemini_include_geometry
     del bpy.types.Scene.gemini_use_3d_cursor
     del bpy.types.Scene.gemini_include_viewport_screenshot
-    bpy.types.VIEW3D_MT_mesh_add.remove(menu_func)
     clear_props()
+    bpy.types.VIEW3D_MT_mesh_add.remove(menu_func)
+
+    for cls in reversed(classes):
+        bpy.utils.unregister_class(cls)
 
 
 if __name__ == "__main__":

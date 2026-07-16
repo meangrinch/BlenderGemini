@@ -57,9 +57,29 @@ def _ensure_object_mode_for_screenshot(preserve_edit_mode=True):
         return lambda: None
 
 
+class GEMINI_ChatMessage(bpy.types.PropertyGroup):
+    """One chat-history entry (user or assistant)."""
+
+    type: bpy.props.StringProperty(
+        name="Type",
+        description="Message role: user or assistant",
+        default="",
+    )
+    content: bpy.props.StringProperty(
+        name="Content",
+        description="Message text or generated code",
+        default="",
+    )
+    interaction_id: bpy.props.StringProperty(
+        name="Interaction ID",
+        description="Gemini Interactions API id for multi-turn continuity",
+        default="",
+    )
+
+
 def init_props():
     bpy.types.Scene.gemini_chat_history = bpy.props.CollectionProperty(
-        type=bpy.types.PropertyGroup
+        type=GEMINI_ChatMessage
     )
     bpy.types.Scene.gemini_model = bpy.props.EnumProperty(
         name="Gemini Model",
@@ -110,9 +130,6 @@ def init_props():
         name="Previous Interaction ID",
         default="",
     )
-    bpy.types.PropertyGroup.type = bpy.props.StringProperty()
-    bpy.types.PropertyGroup.content = bpy.props.StringProperty()
-    bpy.types.PropertyGroup.interaction_id = bpy.props.StringProperty(default="")
     bpy.types.Scene.gemini_enable_thinking = bpy.props.BoolProperty(
         name="Enable Thinking",
         description="Enable model's thinking capabilities in the response (only for compatible models)",
@@ -138,6 +155,7 @@ def init_props():
 
 def clear_props():
     del bpy.types.Scene.gemini_chat_history
+    del bpy.types.Scene.gemini_model
     del bpy.types.Scene.gemini_chat_input
     del bpy.types.Scene.gemini_button_pressed
     del bpy.types.Scene.gemini_previous_interaction_id
@@ -362,8 +380,9 @@ def capture_viewport_screenshot_base64(context, max_size=1024):
                                 # Optionally downscale if larger than max_size
                                 try:
                                     loaded_img = bpy.data.images.load(tmp_path)
-                                    width, height = int(loaded_img.size[0]), int(
-                                        loaded_img.size[1]
+                                    width, height = (
+                                        int(loaded_img.size[0]),
+                                        int(loaded_img.size[1]),
                                     )
                                     largest = max(width, height)
                                     if max_size and largest > int(max_size):
