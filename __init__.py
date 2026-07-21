@@ -450,8 +450,6 @@ class GEMINI_PT_Panel(bpy.types.Panel):
         model_name = context.scene.gemini_model
         if model_name.startswith("gemini-3"):
             column.prop(context.scene, "gemini_thinking_level")
-        elif "gemini-2.5-flash" in model_name:
-            column.prop(context.scene, "gemini_enable_thinking")
 
         column.label(text="Enter your message:")
         column.prop(context.scene, "gemini_chat_input", text="")

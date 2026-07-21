@@ -86,9 +86,14 @@ def init_props():
         description="Select the Gemini model to use",
         items=[
             (
-                "gemini-3.5-flash",
-                "Gemini 3.5 Flash",
-                "Use Gemini 3.5 Flash",
+                "gemini-3.6-flash",
+                "Gemini 3.6 Flash",
+                "Use Gemini 3.6 Flash",
+            ),
+            (
+                "gemini-3.5-flash-lite",
+                "Gemini 3.5 Flash Lite",
+                "Use Gemini 3.5 Flash Lite",
             ),
             (
                 "gemini-3.1-pro-preview",
@@ -96,29 +101,12 @@ def init_props():
                 "Use Gemini 3.1 Pro Preview",
             ),
             (
-                "gemini-3.1-flash-lite",
-                "Gemini 3.1 Flash Lite",
-                "Use Gemini 3.1 Flash Lite",
-            ),
-            (
                 "gemini-3-flash-preview",
                 "Gemini 3 Flash Preview",
                 "Use Gemini 3 Flash Preview",
             ),
-            ("gemini-2.5-pro", "Gemini 2.5 Pro", "Use Gemini 2.5 Pro"),
-            ("gemini-2.5-flash", "Gemini 2.5 Flash", "Use Gemini 2.5 Flash"),
-            (
-                "gemini-2.5-flash-lite-preview-09-2025",
-                "Gemini 2.5 Flash Lite Preview 09-2025",
-                "Use Gemini 2.5 Flash Lite Preview 09-2025",
-            ),
-            (
-                "gemini-2.5-flash-lite",
-                "Gemini 2.5 Flash Lite",
-                "Use Gemini 2.5 Flash Lite",
-            ),
         ],
-        default="gemini-3.5-flash",
+        default="gemini-3.6-flash",
     )
     bpy.types.Scene.gemini_chat_input = bpy.props.StringProperty(
         name="Message",
@@ -129,11 +117,6 @@ def init_props():
     bpy.types.Scene.gemini_previous_interaction_id = bpy.props.StringProperty(
         name="Previous Interaction ID",
         default="",
-    )
-    bpy.types.Scene.gemini_enable_thinking = bpy.props.BoolProperty(
-        name="Enable Thinking",
-        description="Enable model's thinking capabilities in the response (only for compatible models)",
-        default=True,
     )
     bpy.types.Scene.gemini_thinking_level = bpy.props.EnumProperty(
         name="Thinking Level",
@@ -159,7 +142,6 @@ def clear_props():
     del bpy.types.Scene.gemini_chat_input
     del bpy.types.Scene.gemini_button_pressed
     del bpy.types.Scene.gemini_previous_interaction_id
-    del bpy.types.Scene.gemini_enable_thinking
     del bpy.types.Scene.gemini_thinking_level
     del bpy.types.Scene.gemini_enable_grounding
 
@@ -186,15 +168,6 @@ def _build_interaction_generation_config(context, addon_prefs):
         generation_config["thinking_level"] = getattr(
             context.scene, "gemini_thinking_level", "medium"
         )
-    elif model_name.startswith("gemini-2.5-"):
-        if "pro" in model_name:
-            generation_config["thinking_level"] = "high"
-        else:
-            generation_config["thinking_level"] = (
-                "high"
-                if getattr(context.scene, "gemini_enable_thinking", True)
-                else "minimal"
-            )
 
     return generation_config
 
