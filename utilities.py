@@ -290,9 +290,14 @@ def make_gemini_api_request(url, headers, data):
             }
 
         except requests.exceptions.RequestException as e:
-            error_msg = (
-                f"API request failed (attempt {attempt + 1}/{max_retries}): {str(e)}"
-            )
+            details = ""
+            if (
+                hasattr(e, "response")
+                and e.response is not None
+                and getattr(e.response, "text", None)
+            ):
+                details = f"\nAPI Error details: {e.response.text}"
+            error_msg = f"API request failed (attempt {attempt + 1}/{max_retries}): {str(e)}{details}"
             print(error_msg)
 
             status_code = getattr(getattr(e, "response", None), "status_code", None)
@@ -1263,6 +1268,26 @@ def generate_blender_code(
     )
 
     response = make_gemini_api_request(GEMINI_INTERACTIONS_URL, headers, data)
+    if not response and previous_interaction_id:
+        print(
+            f"Interaction request with previous_interaction_id '{previous_interaction_id}' failed. "
+            "Clearing stale ID and retrying fresh interaction..."
+        )
+        if hasattr(context, "scene") and hasattr(
+            context.scene, "gemini_previous_interaction_id"
+        ):
+            context.scene.gemini_previous_interaction_id = ""
+
+        data = _build_interaction_request_data(
+            context.scene.gemini_model,
+            _build_interaction_input_parts(full_prompt, image_b64),
+            generation_system_prompt,
+            generation_config=generation_config,
+            previous_interaction_id="",
+            enable_grounding=enable_grounding,
+        )
+        response = make_gemini_api_request(GEMINI_INTERACTIONS_URL, headers, data)
+
     if response:
         return {
             "code": _extract_code_from_response_text(response["text"]),
@@ -1392,6 +1417,26 @@ Use the failed script, traceback, scene summary, and optional context below to p
     )
 
     response = make_gemini_api_request(GEMINI_INTERACTIONS_URL, headers, data)
+    if not response and previous_interaction_id:
+        print(
+            f"Fix request with previous_interaction_id '{previous_interaction_id}' failed. "
+            "Clearing stale ID and retrying..."
+        )
+        if hasattr(context, "scene") and hasattr(
+            context.scene, "gemini_previous_interaction_id"
+        ):
+            context.scene.gemini_previous_interaction_id = ""
+
+        data = _build_interaction_request_data(
+            context.scene.gemini_model,
+            _build_interaction_input_parts(fix_prompt, image_b64),
+            repair_system_prompt,
+            generation_config=generation_config,
+            previous_interaction_id="",
+            enable_grounding=enable_grounding,
+        )
+        response = make_gemini_api_request(GEMINI_INTERACTIONS_URL, headers, data)
+
     if response:
         return {
             "code": _extract_code_from_response_text(response["text"]),
