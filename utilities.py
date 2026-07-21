@@ -77,6 +77,21 @@ class GEMINI_ChatMessage(bpy.types.PropertyGroup):
     )
 
 
+def get_thinking_level_items(self, context):
+    items = [
+        ("high", "High", "Deeper thinking for difficult tasks"),
+        ("medium", "Medium", "Balanced thinking for most tasks"),
+        ("low", "Low", "Lighter thinking for faster responses"),
+    ]
+    if context is None or getattr(context, "scene", None) is None:
+        items.append(("minimal", "Minimal", "No thinking for instant responses"))
+        return items
+
+    if "gemini-3.1-pro" not in getattr(context.scene, "gemini_model", ""):
+        items.append(("minimal", "Minimal", "No thinking for instant responses"))
+    return items
+
+
 def init_props():
     bpy.types.Scene.gemini_chat_history = bpy.props.CollectionProperty(
         type=GEMINI_ChatMessage
@@ -121,13 +136,7 @@ def init_props():
     bpy.types.Scene.gemini_thinking_level = bpy.props.EnumProperty(
         name="Thinking Level",
         description="Select the thinking level for Gemini 3.x models",
-        items=[
-            ("minimal", "Minimal", "No thinking for instant responses"),
-            ("low", "Low", "Lighter thinking for faster responses"),
-            ("medium", "Medium", "Balanced thinking for most tasks"),
-            ("high", "High", "Deeper thinking for difficult tasks"),
-        ],
-        default="medium",
+        items=get_thinking_level_items,
     )
     bpy.types.Scene.gemini_enable_grounding = bpy.props.BoolProperty(
         name="Enable Grounding",
