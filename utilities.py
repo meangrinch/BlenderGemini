@@ -77,6 +77,9 @@ class GEMINI_ChatMessage(bpy.types.PropertyGroup):
     )
 
 
+NO_MINIMAL_THINKING_MODELS = ("gemini-3.1-pro", "gemini-3.7-flash")
+
+
 def get_thinking_level_items(self, context):
     items = [
         ("high", "High", "Deeper thinking for difficult tasks"),
@@ -87,7 +90,8 @@ def get_thinking_level_items(self, context):
         items.append(("minimal", "Minimal", "No thinking for instant responses"))
         return items
 
-    if "gemini-3.1-pro" not in getattr(context.scene, "gemini_model", ""):
+    model_name = getattr(context.scene, "gemini_model", "")
+    if not any(m in model_name for m in NO_MINIMAL_THINKING_MODELS):
         items.append(("minimal", "Minimal", "No thinking for instant responses"))
     return items
 
@@ -101,9 +105,9 @@ def init_props():
         description="Select the Gemini model to use",
         items=[
             (
-                "gemini-3.6-flash",
-                "Gemini 3.6 Flash",
-                "Use Gemini 3.6 Flash",
+                "gemini-3.7-flash",
+                "Gemini 3.7 Flash",
+                "Use Gemini 3.7 Flash",
             ),
             (
                 "gemini-3.5-flash-lite",
@@ -121,7 +125,7 @@ def init_props():
                 "Use Gemini 3 Flash Preview",
             ),
         ],
-        default="gemini-3.6-flash",
+        default="gemini-3.7-flash",
     )
     bpy.types.Scene.gemini_chat_input = bpy.props.StringProperty(
         name="Message",
