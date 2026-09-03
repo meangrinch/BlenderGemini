@@ -77,7 +77,7 @@ class GEMINI_ChatMessage(bpy.types.PropertyGroup):
     )
 
 
-NO_MINIMAL_THINKING_MODELS = ("gemini-3.1-pro", "gemini-3.7-flash")
+NO_MINIMAL_THINKING_MODELS = ("gemini-3.1-pro", "gemini-3.8-flash")
 
 
 def get_thinking_level_items(self, context):
@@ -105,9 +105,9 @@ def init_props():
         description="Select the Gemini model to use",
         items=[
             (
-                "gemini-3.7-flash",
-                "Gemini 3.7 Flash",
-                "Use Gemini 3.7 Flash",
+                "gemini-3.8-flash",
+                "Gemini 3.8 Flash",
+                "Use Gemini 3.8 Flash",
             ),
             (
                 "gemini-3.5-flash-lite",
@@ -119,13 +119,8 @@ def init_props():
                 "Gemini 3.1 Pro Preview",
                 "Use Gemini 3.1 Pro Preview",
             ),
-            (
-                "gemini-3-flash-preview",
-                "Gemini 3 Flash Preview",
-                "Use Gemini 3 Flash Preview",
-            ),
         ],
-        default="gemini-3.7-flash",
+        default="gemini-3.8-flash",
     )
     bpy.types.Scene.gemini_chat_input = bpy.props.StringProperty(
         name="Message",
