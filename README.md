@@ -26,5 +26,5 @@ Blender can be controlled using program scripts written in Python. This plugin p
 
 ## Requirements
 
-- Blender 3.1 or later
-- Gemini API key
+- Blender 4.5 LTS or later
+- Gemini API key (via Google AI Studio)
