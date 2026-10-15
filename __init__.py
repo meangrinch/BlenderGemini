@@ -1,6 +1,5 @@
 import importlib
 import os
-import textwrap
 import threading
 
 import bmesh
@@ -447,10 +446,11 @@ class GEMINI_PT_Panel(bpy.types.Panel):
                 )
                 delete_message_op.message_index = index
             else:
-                lines = textwrap.wrap(f"User: {message.content}", wrap_width)
-                message_column = box.column(align=True)
-                row = message_column.row()
-                row.label(text=lines[0])
+                text = "User: " + " ".join(message.content.split())
+                if len(text) > wrap_width:
+                    text = text[: wrap_width - 3].rstrip() + "..."
+                row = box.row()
+                row.label(text=text)
                 reuse_op = row.operator(
                     "gemini.reuse_prompt", text="", icon="LOOP_BACK", emboss=False
                 )
@@ -459,8 +459,6 @@ class GEMINI_PT_Panel(bpy.types.Panel):
                     "gemini.delete_message", text="", icon="TRASH", emboss=False
                 )
                 delete_message_op.message_index = index
-                for line in lines[1:]:
-                    message_column.label(text=line)
 
         column.separator()
 
@@ -472,7 +470,7 @@ class GEMINI_PT_Panel(bpy.types.Panel):
             column.prop(context.scene, "gemini_thinking_level")
 
         column.label(text="Enter your message:")
-        column.prop(context.scene, "gemini_chat_input", text="")
+        column.textbox(context.scene, "gemini_chat_input", initial_visible_lines=1)
         # Minimal toggles retained per user request
         row = column.row(align=True)
         row.prop(
