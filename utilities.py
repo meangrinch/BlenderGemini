@@ -1,6 +1,7 @@
 import base64
 import contextlib
 import heapq
+import inspect
 import json
 import math
 import os
@@ -18,6 +19,9 @@ GEMINI_INTERACTIONS_URL = (
 )
 API_REQUEST_TIMEOUT = 300
 LOCAL_PATCH_RADIUS = 0.24
+MAX_SUMMARY_OBJECTS = 200
+# A rejected previous_interaction_id (expired or unknown) comes back as one of these.
+STALE_INTERACTION_STATUSES = (400, 404)
 # Reused so status polls keep one TLS connection open instead of reconnecting each time.
 _http_session = requests.Session()
 
@@ -28,38 +32,25 @@ def get_api_key(context, addon_name):
     return addon_prefs.api_key
 
 
-def _ensure_object_mode_for_screenshot(preserve_edit_mode=True):
+def _ensure_object_mode_for_screenshot():
     """
-    Prepare mode for screenshot safety.
-    - If preserve_edit_mode is True and active object is in Edit Mode, keep Edit Mode.
-    - Otherwise, switch to Object Mode for capture.
-    Returns a callable to restore the previous mode, which is a no-op if nothing needs restoring.
+    Keep Object or Edit Mode as is; switch any other mode to Object Mode for capture.
+    Returns a callable that restores the previous mode.
     """
     try:
         obj = bpy.context.active_object
-        if obj is None:
+        if obj is None or obj.mode in {"OBJECT", "EDIT"}:
             return lambda: None
         prev_mode = obj.mode
-        if prev_mode != "OBJECT":
-            if preserve_edit_mode and prev_mode == "EDIT":
-                # Keep Edit Mode; no switch, but still provide restore closure
-                return lambda: None
-            try:
-                bpy.ops.object.mode_set(mode="OBJECT")
-            except Exception:
-                # If we cannot switch, best effort: do not attempt restore
-                return lambda: None
-
-        def _restore():
-            try:
-                if obj and prev_mode != "OBJECT":
-                    bpy.ops.object.mode_set(mode=prev_mode)
-            except Exception:
-                pass
-
-        return _restore
+        bpy.ops.object.mode_set(mode="OBJECT")
     except Exception:
         return lambda: None
+
+    def _restore():
+        with contextlib.suppress(Exception):
+            bpy.ops.object.mode_set(mode=prev_mode)
+
+    return _restore
 
 
 class GEMINI_ChatMessage(bpy.types.PropertyGroup):
@@ -183,8 +174,9 @@ def _build_interaction_generation_config(context, addon_prefs):
 
     model_name = getattr(context.scene, "gemini_model", "") or ""
     if model_name.startswith(THINKING_LEVEL_MODEL_PREFIXES):
-        generation_config["thinking_level"] = getattr(
-            context.scene, "gemini_thinking_level", "medium"
+        # Empty when the stored level isn't offered by the current model (e.g. "minimal").
+        generation_config["thinking_level"] = (
+            context.scene.gemini_thinking_level or "high"
         )
     if model_name in LONG_DECODE_MODELS:
         generation_config["max_output_tokens"] = LONG_DECODE_MAX_OUTPUT_TOKENS
@@ -294,14 +286,17 @@ def _extract_interaction_output_text(response_data):
 
 
 def _extract_code_from_response_text(response_text):
-    code_match = re.search(r"```(?:python)?(.*?)```", response_text, re.DOTALL)
+    code_match = re.search(r"```(?:[\w+-]*\n)?(.*?)```", response_text, re.DOTALL)
     if code_match:
         return code_match.group(1).strip()
     return response_text.strip()
 
 
 def make_gemini_api_request(url, headers, data):
-    """Makes a request to the Gemini API with retry logic for handling errors."""
+    """
+    Makes a request to the Gemini API with retry logic for handling errors.
+    Returns (result, None) on success, or (None, http_status_or_None) on failure.
+    """
     max_retries = 5
     wait_time = 1
     max_wait_time = 16
@@ -340,7 +335,7 @@ def make_gemini_api_request(url, headers, data):
             return {
                 "text": _extract_interaction_output_text(response_data),
                 "interaction_id": interaction_id,
-            }
+            }, None
 
         except requests.exceptions.RequestException as e:
             details = ""
@@ -360,7 +355,7 @@ def make_gemini_api_request(url, headers, data):
                 and status_code != 429
             ):
                 print("Non-retryable client error. Giving up.")
-                return None
+                return None, status_code
 
             if attempt < max_retries - 1:
                 current_wait = min(wait_time * (2**attempt), max_wait_time)
@@ -368,10 +363,10 @@ def make_gemini_api_request(url, headers, data):
                 time.sleep(current_wait)
             else:
                 print("Maximum retry attempts reached. Giving up.")
-                return None
+                return None, status_code
         except (KeyError, IndexError, TypeError, ValueError) as e:
             print(f"Error parsing API response: {e!s}")
-            return None
+            return None, None
 
 
 def capture_viewport_screenshot_base64(context, max_size=1024):
@@ -386,8 +381,7 @@ def capture_viewport_screenshot_base64(context, max_size=1024):
     Returns None on failure.
     """
     try:
-        # Preserve Edit Mode if active; otherwise enforce Object Mode
-        restore_mode = _ensure_object_mode_for_screenshot(preserve_edit_mode=True)
+        restore_mode = _ensure_object_mode_for_screenshot()
         for window in bpy.context.window_manager.windows:
             for area in window.screen.areas:
                 if area.type == "VIEW_3D":
@@ -473,10 +467,15 @@ def get_scene_objects_as_text(context):
         except Exception:
             return "unknown"
 
-    objects = list(context.scene.objects)
     active_obj = getattr(context.view_layer.objects, "active", None)
     selected_objects = list(getattr(context, "selected_objects", []))
     selected_names = [obj.name for obj in selected_objects]
+    selected_set = set(selected_objects)
+    # Stable sort puts the active and selected objects first, so the cap keeps them.
+    objects = sorted(
+        context.scene.objects,
+        key=lambda obj: obj != active_obj and obj not in selected_set,
+    )
 
     lines = ["Scene State:"]
     if active_obj is not None:
@@ -496,7 +495,7 @@ def get_scene_objects_as_text(context):
         lines.append("- None")
         return "\n".join(lines)
 
-    for obj in objects:
+    for obj in objects[:MAX_SUMMARY_OBJECTS]:
         mode = getattr(obj, "mode", "UNKNOWN")
         parts = [
             f"- `{obj.name}`",
@@ -515,23 +514,11 @@ def get_scene_objects_as_text(context):
                 ]
             )
         lines.append(", ".join(parts))
+    if len(objects) > MAX_SUMMARY_OBJECTS:
+        lines.append(
+            f"- ...and {len(objects) - MAX_SUMMARY_OBJECTS} more objects not listed"
+        )
     return "\n".join(lines)
-
-
-def get_blender_version_string():
-    """
-    Return a concise Blender version string like "4.2.0". Falls back to tuple if needed.
-    """
-    try:
-        vs = getattr(bpy.app, "version_string", None)
-        if isinstance(vs, str) and vs.strip():
-            return vs.strip()
-        ver_tuple = getattr(bpy.app, "version", None)
-        if isinstance(ver_tuple, (tuple, list)) and len(ver_tuple) >= 2:
-            return ".".join(str(p) for p in ver_tuple[:3])
-    except Exception:
-        pass
-    return "Unknown"
 
 
 def _get_nearest_objects_json(context, max_count=3):
@@ -574,10 +561,10 @@ def _get_nearest_objects_json(context, max_count=3):
         return []
 
     candidates.sort(key=lambda item: item[0])
-    result = []
-    for dist, obj in candidates[: max_count if max_count and max_count > 0 else 3]:
-        result.append({"name": obj.name, "type": obj.type, "distance": round(dist, 4)})
-    return result
+    return [
+        {"name": obj.name, "type": obj.type, "distance": round(dist, 4)}
+        for dist, obj in candidates[:max_count]
+    ]
 
 
 def _choose_cursor_target_object(context):
@@ -624,7 +611,7 @@ def _choose_cursor_target_object(context):
     return (None, "No visible candidates", None)
 
 
-def _build_3d_cursor_context_json(context, include_nearest=True, nearest_count=3):
+def _build_3d_cursor_context_json(context):
     """Build JSON structure for 3D cursor state."""
     try:
         cursor = context.scene.cursor
@@ -664,15 +651,8 @@ def _build_3d_cursor_context_json(context, include_nearest=True, nearest_count=3
                     round(forward.z, 4),
                 ],
             },
+            "nearest_objects": _get_nearest_objects_json(context),
         }
-
-        if include_nearest:
-            cursor_state["nearest_objects"] = _get_nearest_objects_json(
-                context, max_count=nearest_count
-            )
-        else:
-            cursor_state["nearest_objects"] = []
-
         return cursor_state
     except Exception:
         return {
@@ -722,9 +702,7 @@ def _format_cursor_json_compact(obj):
 
 def _build_complete_cursor_json(context):
     """Build complete JSON structure combining cursor_state and cursor_target_object."""
-    cursor_state = _build_3d_cursor_context_json(
-        context, include_nearest=True, nearest_count=3
-    )
+    cursor_state = _build_3d_cursor_context_json(context)
     cursor_target_object = _build_cursor_target_object_json(context)
 
     return {"cursor_state": cursor_state, "cursor_target_object": cursor_target_object}
@@ -860,18 +838,6 @@ def _compute_falloff_weight(t, mode="SMOOTH"):
         return 0.0
     if mode == "LINEAR":
         return 1.0 - t
-    if mode == "GAUSSIAN":
-        # Zero-mean Gaussian with sigma=0.35 over t in [0,1]
-        sigma = 0.35
-        x = min(max(t, 0.0), 1.0)
-        return math.exp(-(x * x) / (2.0 * sigma * sigma))
-    if mode == "PLATEAU":
-        # Flat center up to 0.5, then smooth falloff to 0
-        if t <= 0.5:
-            return 1.0
-        # Remap [0.5,1] -> [0,1]
-        x = (t - 0.5) / 0.5
-        return 1.0 - (3.0 * x * x - 2.0 * x * x * x)
     # Default SMOOTHSTEP: 1 - (3t^2 - 2t^3)
     return 1.0 - (3.0 * t * t - 2.0 * t * t * t)
 
@@ -1195,115 +1161,96 @@ def apply_radial_shrink_fatten(
         return False
 
 
-def generate_blender_code(
-    prompt,
-    chat_history,
-    context,
-    generation_system_prompt,
-    detailed_geometry=None,
-    use_3d_cursor=False,
-    include_viewport_screenshot=False,
-):
-    api_key = get_api_key(context, "BlenderGemini") or os.getenv("GEMINI_API_KEY")
-
-    preferences = context.preferences
-    addon_prefs = preferences.addons["BlenderGemini"].preferences
-
-    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
-    previous_interaction_id = getattr(
-        context.scene, "gemini_previous_interaction_id", ""
+# Exposed in the exec namespace and advertised to the model by signature.
+CODE_HELPERS = {
+    fn.__name__: fn
+    for fn in (
+        apply_radial_shrink_fatten,
+        get_vertices_in_radius,
+        get_vertices_in_geodesic_radius,
+        raycast_surface,
+        project_point_to_surface_near,
+        ensure_subsurf_for_local_detail,
+        get_local_geometry_patch_text,
     )
+}
+_HELPERS_TEXT = "**[AVAILABLE HELPERS]:**\n" + "".join(
+    f"- {name}{inspect.signature(fn)}\n" for name, fn in CODE_HELPERS.items()
+)
 
-    scene_context = get_scene_objects_as_text(context)
-    full_prompt = ""
-    blender_version = get_blender_version_string()
-    # Subtle environment hint
-    full_prompt += f"(Blender {blender_version})\n\n"
-    if detailed_geometry:
-        full_prompt += (
-            "**Detailed Object Geometry:**\n```json\n" + detailed_geometry + "\n```\n\n"
-        )
 
-    if use_3d_cursor:
-        cursor_json = _build_complete_cursor_json(context)
-        cursor_json_str = _format_cursor_json_compact(cursor_json)
-        full_prompt += "**3D Cursor Data:**\n```json\n" + cursor_json_str + "\n```\n\n"
-        # Advertise built-in helpers for precise localized edits
-        full_prompt += (
-            "**[AVAILABLE HELPERS]:**\n"
-            "- apply_radial_shrink_fatten(obj, center_local, radius, strength,\n"
-            '  falloff="SMOOTH", mirror=False, mirror_axis="X")\n'
-            "- get_vertices_in_radius(obj, center_local, radius)\n"
-            "- get_vertices_in_geodesic_radius(obj, center_world, radius)\n"
-            "- raycast_surface(obj, origin_world, direction_world, max_distance=1000.0)\n"
-            "- project_point_to_surface_near(obj, guess_world, max_distance=1000.0)\n"
-            "- ensure_subsurf_for_local_detail(obj, target_levels=2)\n"
-            "- get_local_geometry_patch_text(obj, center_world, radius, vertex_limit=2000, face_limit=4000)\n"
-            "\n"
-        )
-
-        # Automatically include a compact local geometry patch around the cursor
-        try:
-            target_obj, _reason, _dist = _choose_cursor_target_object(context)
-            if target_obj is not None:
-                cursor_ws = context.scene.cursor.location.copy()
-                patch_text = get_local_geometry_patch_text(
-                    target_obj, cursor_ws, LOCAL_PATCH_RADIUS
-                )
-                full_prompt += "**[LOCAL GEOMETRY PATCH]:**\n" + patch_text + "\n\n"
-        except Exception:
-            pass
-
-    if include_viewport_screenshot:
-        full_prompt += (
-            "**Viewport Screenshot:** Attached below. Use it to understand view "
-            "orientation and selection state.\n\n"
-        )
-
-    full_prompt += (
-        "**Scene Summary:**\n" + scene_context + "\n\nUser Request: " + prompt
+def _cursor_context_text(context):
+    """3D cursor data, helper signatures, and the local geometry patch near the cursor."""
+    cursor_json_str = _format_cursor_json_compact(_build_complete_cursor_json(context))
+    text = (
+        "**3D Cursor Data:**\n```json\n"
+        + cursor_json_str
+        + "\n```\n\n"
+        + _HELPERS_TEXT
+        + "\n"
     )
-
-    image_b64 = None
-    if include_viewport_screenshot:
-        image_b64 = capture_viewport_screenshot_base64(context)
-
-    generation_config = _build_interaction_generation_config(context, addon_prefs)
-
     try:
-        enable_grounding = getattr(context.scene, "gemini_enable_grounding", False)
+        target_obj, _reason, _dist = _choose_cursor_target_object(context)
+        if target_obj is not None:
+            patch_text = get_local_geometry_patch_text(
+                target_obj, context.scene.cursor.location.copy(), LOCAL_PATCH_RADIUS
+            )
+            text += "**[LOCAL GEOMETRY PATCH]:**\n" + patch_text + "\n\n"
     except Exception:
-        enable_grounding = False
+        pass
+    return text
 
-    data = _build_interaction_request_data(
-        context.scene.gemini_model,
-        _build_interaction_input_parts(full_prompt, image_b64),
-        generation_system_prompt,
-        generation_config=generation_config,
-        previous_interaction_id=previous_interaction_id,
-        enable_grounding=enable_grounding,
+
+def _request_code(
+    context,
+    prompt_text,
+    system_prompt,
+    include_viewport_screenshot,
+    previous_interaction_id,
+):
+    """Send one prompt to Gemini; returns {"code", "interaction_id"} or None."""
+    api_key = get_api_key(context, __package__) or os.getenv("GEMINI_API_KEY")
+    addon_prefs = context.preferences.addons[__package__].preferences
+    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+
+    image_b64 = (
+        capture_viewport_screenshot_base64(context)
+        if include_viewport_screenshot
+        else None
     )
+    request_args = (
+        context.scene.gemini_model,
+        _build_interaction_input_parts(prompt_text, image_b64),
+        system_prompt,
+    )
+    request_kwargs = {
+        "generation_config": _build_interaction_generation_config(context, addon_prefs),
+        "enable_grounding": context.scene.gemini_enable_grounding,
+    }
 
-    response = make_gemini_api_request(GEMINI_INTERACTIONS_URL, headers, data)
-    if not response and previous_interaction_id:
+    response, status = make_gemini_api_request(
+        GEMINI_INTERACTIONS_URL,
+        headers,
+        _build_interaction_request_data(
+            *request_args,
+            previous_interaction_id=previous_interaction_id,
+            **request_kwargs,
+        ),
+    )
+    if (
+        not response
+        and previous_interaction_id
+        and status in STALE_INTERACTION_STATUSES
+    ):
         print(
-            f"Interaction request with previous_interaction_id '{previous_interaction_id}' failed. "
-            "Clearing stale ID and retrying fresh interaction..."
+            f"previous_interaction_id '{previous_interaction_id}' was rejected "
+            f"(HTTP {status}). Retrying as a fresh interaction..."
         )
-        if hasattr(context, "scene") and hasattr(
-            context.scene, "gemini_previous_interaction_id"
-        ):
-            context.scene.gemini_previous_interaction_id = ""
-
-        data = _build_interaction_request_data(
-            context.scene.gemini_model,
-            _build_interaction_input_parts(full_prompt, image_b64),
-            generation_system_prompt,
-            generation_config=generation_config,
-            previous_interaction_id="",
-            enable_grounding=enable_grounding,
+        response, _status = make_gemini_api_request(
+            GEMINI_INTERACTIONS_URL,
+            headers,
+            _build_interaction_request_data(*request_args, **request_kwargs),
         )
-        response = make_gemini_api_request(GEMINI_INTERACTIONS_URL, headers, data)
 
     if response:
         return {
@@ -1311,6 +1258,42 @@ def generate_blender_code(
             "interaction_id": response["interaction_id"],
         }
     return None
+
+
+def generate_blender_code(
+    prompt,
+    context,
+    generation_system_prompt,
+    detailed_geometry=None,
+    use_3d_cursor=False,
+    include_viewport_screenshot=False,
+):
+    full_prompt = f"(Blender {bpy.app.version_string})\n\n"
+    if detailed_geometry:
+        full_prompt += (
+            "**Detailed Object Geometry:**\n```json\n" + detailed_geometry + "\n```\n\n"
+        )
+    if use_3d_cursor:
+        full_prompt += _cursor_context_text(context)
+    if include_viewport_screenshot:
+        full_prompt += (
+            "**Viewport Screenshot:** Attached below. Use it to understand view "
+            "orientation and selection state.\n\n"
+        )
+    full_prompt += (
+        "**Scene Summary:**\n"
+        + get_scene_objects_as_text(context)
+        + "\n\nUser Request: "
+        + prompt
+    )
+
+    return _request_code(
+        context,
+        full_prompt,
+        generation_system_prompt,
+        include_viewport_screenshot,
+        context.scene.gemini_previous_interaction_id,
+    )
 
 
 def fix_blender_code(
@@ -1324,15 +1307,6 @@ def fix_blender_code(
     previous_interaction_id="",
 ):
     """Generate fixed Blender code based on the error message."""
-    api_key = get_api_key(context, "BlenderGemini") or os.getenv("GEMINI_API_KEY")
-
-    preferences = context.preferences
-    addon_prefs = preferences.addons["BlenderGemini"].preferences
-
-    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
-
-    scene_context = get_scene_objects_as_text(context)
-
     detailed_geo_block = ""
     if detailed_geometry:
         detailed_geo_block = f"""
@@ -1342,22 +1316,7 @@ def fix_blender_code(
 ```
 """
 
-    cursor_block = ""
-    if use_3d_cursor:
-        cursor_json = _build_complete_cursor_json(context)
-        cursor_json_str = _format_cursor_json_compact(cursor_json)
-        cursor_block = "**3D Cursor Data:**\n```json\n" + cursor_json_str + "\n```\n\n"
-        cursor_block += (
-            "**[AVAILABLE HELPERS]:**\n"
-            '- apply_radial_shrink_fatten(obj, center_local, radius, strength, falloff="SMOOTH",\n'
-            '  mirror=False, mirror_axis="X")\n'
-            "- get_vertices_in_radius(obj, center_local, radius)\n"
-            "- get_vertices_in_geodesic_radius(obj, center_world, radius)\n"
-            "- raycast_surface(obj, origin_world, direction_world, max_distance=1000.0)\n"
-            "- project_point_to_surface_near(obj, guess_world, max_distance=1000.0)\n"
-            "- ensure_subsurf_for_local_detail(obj, target_levels=2)\n"
-            "- get_local_geometry_patch_text(obj, center_world, radius, vertex_limit=2000, face_limit=4000)\n"
-        )
+    cursor_block = _cursor_context_text(context) if use_3d_cursor else ""
 
     screenshot_block = ""
     if include_viewport_screenshot:
@@ -1366,37 +1325,15 @@ def fix_blender_code(
 Attached below. Use it to infer view orientation and selection state, and to understand the scene context.
 """
 
-    # Auto include a local geometry patch when cursor targeting is enabled
-    patch_block = ""
-    try:
-        if use_3d_cursor:
-            target_obj, _reason, _dist = _choose_cursor_target_object(context)
-            if target_obj is not None:
-                cursor_ws = context.scene.cursor.location.copy()
-                patch_text = get_local_geometry_patch_text(
-                    target_obj, cursor_ws, LOCAL_PATCH_RADIUS
-                )
-                patch_block = f"""
-**[LOCAL GEOMETRY PATCH]:**
-```
-{patch_text}
-```
-"""
-    except Exception:
-        pass
-
-    blender_version = get_blender_version_string()
-
     fix_prompt = f"""### Repair Context
-Environment: Blender {blender_version}
+Environment: Blender {bpy.app.version_string}
 Use the failed script, traceback, scene summary, and optional context below to produce the complete corrected script.
 {detailed_geo_block}
 {cursor_block}
 {screenshot_block}
-{patch_block}
 **[SCENE SUMMARY]:**
 ```
-{scene_context}
+{get_scene_objects_as_text(context)}
 ```
 
 **[FAULTY SCRIPT]:**
@@ -1409,58 +1346,13 @@ Use the failed script, traceback, scene summary, and optional context below to p
 {error_message}
 ```"""
 
-    image_b64 = None
-    if include_viewport_screenshot:
-        image_b64 = capture_viewport_screenshot_base64(context)
-
-    generation_config = _build_interaction_generation_config(context, addon_prefs)
-
-    try:
-        enable_grounding = getattr(context.scene, "gemini_enable_grounding", False)
-    except Exception:
-        enable_grounding = False
-
-    if not previous_interaction_id:
-        previous_interaction_id = getattr(
-            context.scene, "gemini_previous_interaction_id", ""
-        )
-
-    data = _build_interaction_request_data(
-        context.scene.gemini_model,
-        _build_interaction_input_parts(fix_prompt, image_b64),
+    return _request_code(
+        context,
+        fix_prompt,
         repair_system_prompt,
-        generation_config=generation_config,
-        previous_interaction_id=previous_interaction_id,
-        enable_grounding=enable_grounding,
+        include_viewport_screenshot,
+        previous_interaction_id or context.scene.gemini_previous_interaction_id,
     )
-
-    response = make_gemini_api_request(GEMINI_INTERACTIONS_URL, headers, data)
-    if not response and previous_interaction_id:
-        print(
-            f"Fix request with previous_interaction_id '{previous_interaction_id}' failed. "
-            "Clearing stale ID and retrying..."
-        )
-        if hasattr(context, "scene") and hasattr(
-            context.scene, "gemini_previous_interaction_id"
-        ):
-            context.scene.gemini_previous_interaction_id = ""
-
-        data = _build_interaction_request_data(
-            context.scene.gemini_model,
-            _build_interaction_input_parts(fix_prompt, image_b64),
-            repair_system_prompt,
-            generation_config=generation_config,
-            previous_interaction_id="",
-            enable_grounding=enable_grounding,
-        )
-        response = make_gemini_api_request(GEMINI_INTERACTIONS_URL, headers, data)
-
-    if response:
-        return {
-            "code": _extract_code_from_response_text(response["text"]),
-            "interaction_id": response["interaction_id"],
-        }
-    return None
 
 
 def split_area_to_text_editor(context):

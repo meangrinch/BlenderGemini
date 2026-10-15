@@ -1,37 +1,26 @@
 import os
-import sys
 
 import bmesh
 import bpy
 import bpy.props
 import mathutils
 
-libs_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")
-if libs_path not in sys.path:
-    sys.path.append(libs_path)
-
 from .utilities import (
+    CODE_HELPERS,
     THINKING_LEVEL_MODEL_PREFIXES,
     GEMINI_ChatMessage,
-    apply_radial_shrink_fatten,
     clear_props,
-    ensure_subsurf_for_local_detail,
     fix_blender_code,
     generate_blender_code,
     get_api_key,
     get_detailed_object_data,
-    get_local_geometry_patch_text,
-    get_vertices_in_geodesic_radius,
-    get_vertices_in_radius,
     init_props,
-    project_point_to_surface_near,
-    raycast_surface,
     split_area_to_text_editor,
 )
 
 bl_info = {
     "name": "Gemini Blender Assistant",
-    "blender": (4, 5, 0),
+    "blender": (5, 2, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
     "version": (1, 8, 0),
@@ -63,15 +52,17 @@ def _make_namespace(context):
         "__name__": "__main__",
         "bmesh": bmesh,
         "mathutils": mathutils,
-        # Expose helpers so generated code can call them directly
-        "apply_radial_shrink_fatten": apply_radial_shrink_fatten,
-        "get_vertices_in_radius": get_vertices_in_radius,
-        "get_vertices_in_geodesic_radius": get_vertices_in_geodesic_radius,
-        "raycast_surface": raycast_surface,
-        "project_point_to_surface_near": project_point_to_surface_near,
-        "ensure_subsurf_for_local_detail": ensure_subsurf_for_local_detail,
-        "get_local_geometry_patch_text": get_local_geometry_patch_text,
+        **CODE_HELPERS,
     }
+
+
+def _rollback_new_data(objects_before, materials_before):
+    """Remove objects and materials created since the snapshot, before a retry."""
+    _ensure_object_mode()
+    for obj in set(bpy.data.objects) - objects_before:
+        bpy.data.objects.remove(obj, do_unlink=True)
+    for mat in set(bpy.data.materials) - materials_before:
+        bpy.data.materials.remove(mat)
 
 
 def _add_chat_message(scene, message_type, content, interaction_id=""):
@@ -278,17 +269,9 @@ class GEMINI_OT_CopyGeometry(bpy.types.Operator):
         )
 
     def execute(self, context):
-        active_obj = context.active_object
-        if not active_obj:
-            self.report({"ERROR"}, "No object selected")
-            return {"CANCELLED"}
-
-        if active_obj.type != "MESH":
-            self.report({"ERROR"}, "Selected object is not a mesh")
-            return {"CANCELLED"}
-
         try:
-            geometry_text = get_detailed_object_data(active_obj)
+            context.active_object.update_from_editmode()
+            geometry_text = get_detailed_object_data(context.active_object)
             if geometry_text:
                 context.window_manager.clipboard = geometry_text
                 self.report(
@@ -429,178 +412,125 @@ class GEMINI_OT_Execute(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        user_input = context.scene.gemini_chat_input
-        api_key = get_api_key(context, __name__)
-        if not api_key:
-            api_key = os.getenv("GEMINI_API_KEY")
+        scene = context.scene
+        user_input = scene.gemini_chat_input
+        if not user_input.strip():
+            self.report({"ERROR"}, "Please enter a message.")
+            return {"CANCELLED"}
 
-        if not api_key:
+        if not (get_api_key(context, __name__) or os.getenv("GEMINI_API_KEY")):
             self.report(
                 {"ERROR"},
                 "No API key detected. Please set your Gemini API key in the addon preferences.",
             )
             return {"CANCELLED"}
 
-        preferences = context.preferences
-        addon_prefs = preferences.addons[__name__].preferences
-        max_fix_attempts = addon_prefs.max_fix_attempts
+        scene.gemini_button_pressed = True
+        try:
+            return self._generate_and_run(context, user_input)
+        finally:
+            scene.gemini_button_pressed = False
 
-        context.scene.gemini_button_pressed = True
+    def _generate_and_run(self, context, user_input):
+        scene = context.scene
+        max_fix_attempts = context.preferences.addons[
+            __name__
+        ].preferences.max_fix_attempts
         bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
 
-        # Respect user toggles for geometry inclusion and 3D cursor targeting
-        detailed_geometry = None
-        if context.scene.gemini_include_geometry:
-            active_obj = context.active_object
-            if active_obj:
-                detailed_geometry = get_detailed_object_data(active_obj)
-        use_3d_cursor = context.scene.gemini_use_3d_cursor
+        # Edit Mode changes live in the edit BMesh until synced back to obj.data.
+        for obj in context.objects_in_mode:
+            obj.update_from_editmode()
 
-        generation_result = generate_blender_code(
+        detailed_geometry = None
+        if scene.gemini_include_geometry and context.active_object:
+            detailed_geometry = get_detailed_object_data(context.active_object)
+        use_3d_cursor = scene.gemini_use_3d_cursor
+        include_screenshot = scene.gemini_include_viewport_screenshot
+
+        result = generate_blender_code(
             user_input,
-            context.scene.gemini_chat_history,
             context,
             generation_system_prompt,
             detailed_geometry=detailed_geometry,
             use_3d_cursor=use_3d_cursor,
-            include_viewport_screenshot=context.scene.gemini_include_viewport_screenshot,
+            include_viewport_screenshot=include_screenshot,
         )
-
-        if generation_result and generation_result.get("code"):
-            blender_code = generation_result["code"]
-            generation_interaction_id = generation_result.get("interaction_id", "")
-            objects_before = set(bpy.data.objects)
-            materials_before = set(bpy.data.materials)
-
-            _ensure_object_mode()
-            namespace = _make_namespace(context)
-
-            try:
-                exec(blender_code, namespace)
-                _commit_successful_turn(
-                    context.scene,
-                    user_input,
-                    blender_code,
-                    generation_interaction_id,
-                )
-            except Exception as e:
-                if max_fix_attempts <= 0:
-                    self.report(
-                        {"ERROR"},
-                        f"Error executing code and fixes are disabled: {e!s}",
-                    )
-                    context.scene.gemini_button_pressed = False
-                    return {"CANCELLED"}
-
-                error_message = f"Error executing generated code: {e!s}"
-                self.report(
-                    {"WARNING"},
-                    f"Original code had an error. Attempting to fix (1/{max_fix_attempts})...",
-                )
-
-                objects_after = set(bpy.data.objects)
-                materials_after = set(bpy.data.materials)
-
-                # Ensure we're not in Edit Mode before cleanup
-                _ensure_object_mode()
-                for obj in objects_after - objects_before:
-                    bpy.data.objects.remove(obj, do_unlink=True)
-
-                for mat in materials_after - materials_before:
-                    bpy.data.materials.remove(mat)
-
-                current_code = blender_code
-                current_error = error_message
-                current_detailed_geometry = detailed_geometry
-                repair_previous_interaction_id = generation_interaction_id
-
-                for attempt in range(1, max_fix_attempts + 1):
-                    fix_result = fix_blender_code(
-                        current_code,
-                        current_error,
-                        context,
-                        repair_system_prompt,
-                        detailed_geometry=current_detailed_geometry,
-                        use_3d_cursor=use_3d_cursor,
-                        include_viewport_screenshot=context.scene.gemini_include_viewport_screenshot,
-                        previous_interaction_id=repair_previous_interaction_id,
-                    )
-
-                    if not fix_result or not fix_result.get("code"):
-                        self.report(
-                            {"ERROR"},
-                            f"Could not fix the code on attempt {attempt}: {current_error}",
-                        )
-                        context.scene.gemini_button_pressed = False
-                        return {"CANCELLED"}
-
-                    fixed_code = fix_result["code"]
-                    fix_interaction_id = fix_result.get("interaction_id", "")
-                    repair_previous_interaction_id = (
-                        fix_interaction_id or repair_previous_interaction_id
-                    )
-
-                    try:
-                        _ensure_object_mode()
-                        namespace = _make_namespace(context)
-                        exec(fixed_code, namespace)
-                        self.report(
-                            {"INFO"},
-                            f"Code fixed and executed successfully on attempt {attempt}!",
-                        )
-                        _commit_successful_turn(
-                            context.scene,
-                            user_input,
-                            fixed_code,
-                            fix_interaction_id,
-                        )
-                        break
-                    except Exception as e2:
-                        current_error = f"Error executing fixed code: {e2!s}"
-
-                        if attempt < max_fix_attempts:
-                            self.report(
-                                {"WARNING"},
-                                (
-                                    f"Fix attempt {attempt} had an error. Attempting to fix again "
-                                    f"({attempt + 1}/{max_fix_attempts})..."
-                                ),
-                            )
-
-                            objects_after_fix = set(bpy.data.objects)
-                            materials_after_fix = set(bpy.data.materials)
-
-                            _ensure_object_mode()
-                            for obj in objects_after_fix - objects_before:
-                                bpy.data.objects.remove(obj, do_unlink=True)
-
-                            for mat in materials_after_fix - materials_before:
-                                bpy.data.materials.remove(mat)
-
-                            current_code = fixed_code
-                        else:
-                            self.report(
-                                {"ERROR"},
-                                f"Error executing code after {max_fix_attempts} fix attempts: {e2}",
-                            )
-                            context.scene.gemini_button_pressed = False
-                            return {"CANCELLED"}
-        else:
+        if not result or not result["code"]:
             self.report(
                 {"ERROR"},
                 "Failed to generate code from Gemini API. Please check the console for details.",
             )
-            context.scene.gemini_button_pressed = False
             return {"CANCELLED"}
+
+        code = result["code"]
+        interaction_id = result["interaction_id"]
+        repair_previous_interaction_id = interaction_id
+        objects_before = set(bpy.data.objects)
+        materials_before = set(bpy.data.materials)
+        error = ""
+
+        # Attempt 0 runs the generated code; later attempts run Gemini's fixes.
+        for attempt in range(max_fix_attempts + 1):
+            if attempt:
+                fix_result = fix_blender_code(
+                    code,
+                    error,
+                    context,
+                    repair_system_prompt,
+                    detailed_geometry=detailed_geometry,
+                    use_3d_cursor=use_3d_cursor,
+                    include_viewport_screenshot=include_screenshot,
+                    previous_interaction_id=repair_previous_interaction_id,
+                )
+                if not fix_result or not fix_result["code"]:
+                    self.report(
+                        {"ERROR"},
+                        f"Could not fix the code on attempt {attempt}: {error}",
+                    )
+                    return {"CANCELLED"}
+                code = fix_result["code"]
+                interaction_id = fix_result["interaction_id"]
+                repair_previous_interaction_id = (
+                    interaction_id or repair_previous_interaction_id
+                )
+
+            _ensure_object_mode()
+            try:
+                exec(code, _make_namespace(context))
+            except Exception as e:
+                kind = "fixed" if attempt else "generated"
+                error = f"Error executing {kind} code: {e!s}"
+                if attempt == max_fix_attempts:
+                    if max_fix_attempts == 0:
+                        message = f"Error executing code and fixes are disabled: {e!s}"
+                    else:
+                        message = f"Error executing code after {max_fix_attempts} fix attempts: {e}"
+                    self.report({"ERROR"}, message)
+                    return {"CANCELLED"}
+
+                if attempt:
+                    message = (
+                        f"Fix attempt {attempt} had an error. Attempting to fix again "
+                        f"({attempt + 1}/{max_fix_attempts})..."
+                    )
+                else:
+                    message = f"Original code had an error. Attempting to fix (1/{max_fix_attempts})..."
+                self.report({"WARNING"}, message)
+                _rollback_new_data(objects_before, materials_before)
+                continue
+
+            if attempt:
+                self.report(
+                    {"INFO"},
+                    f"Code fixed and executed successfully on attempt {attempt}!",
+                )
+            _commit_successful_turn(scene, user_input, code, interaction_id)
+            break
 
         # Always return to Object Mode at the end to keep viewport/draw stable
         _ensure_object_mode()
-        context.scene.gemini_button_pressed = False
         return {"FINISHED"}
-
-
-def menu_func(self, context):
-    self.layout.operator(GEMINI_OT_Execute.bl_idname)
 
 
 class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
@@ -701,7 +631,6 @@ def register():
         default=False,
     )
 
-    bpy.types.VIEW3D_MT_mesh_add.append(menu_func)
     init_props()
 
 
@@ -711,7 +640,6 @@ def unregister():
     del bpy.types.Scene.gemini_use_3d_cursor
     del bpy.types.Scene.gemini_include_viewport_screenshot
     clear_props()
-    bpy.types.VIEW3D_MT_mesh_add.remove(menu_func)
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
