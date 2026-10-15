@@ -10,7 +10,8 @@ libs_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib")
 if libs_path not in sys.path:
     sys.path.append(libs_path)
 
-from .utilities import (  # noqa: E402
+from .utilities import (
+    THINKING_LEVEL_MODEL_PREFIXES,
     GEMINI_ChatMessage,
     apply_radial_shrink_fatten,
     clear_props,
@@ -299,7 +300,7 @@ class GEMINI_OT_CopyGeometry(bpy.types.Operator):
                 self.report({"ERROR"}, "No geometry data available")
                 return {"CANCELLED"}
         except Exception as e:
-            self.report({"ERROR"}, f"Failed to copy geometry: {str(e)}")
+            self.report({"ERROR"}, f"Failed to copy geometry: {e!s}")
             return {"CANCELLED"}
 
 
@@ -330,7 +331,7 @@ class GEMINI_OT_CopyCursor(bpy.types.Operator):
                 self.report({"ERROR"}, "No cursor data available")
                 return {"CANCELLED"}
         except Exception as e:
-            self.report({"ERROR"}, f"Failed to copy cursor data: {str(e)}")
+            self.report({"ERROR"}, f"Failed to copy cursor data: {e!s}")
             return {"CANCELLED"}
 
 
@@ -371,7 +372,7 @@ class GEMINI_PT_Panel(bpy.types.Panel):
         column.prop(context.scene, "gemini_model", text="")
 
         model_name = context.scene.gemini_model
-        if model_name.startswith("gemini-3"):
+        if model_name.startswith(THINKING_LEVEL_MODEL_PREFIXES):
             column.prop(context.scene, "gemini_thinking_level")
 
         column.label(text="Enter your message:")
@@ -486,12 +487,12 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                 if max_fix_attempts <= 0:
                     self.report(
                         {"ERROR"},
-                        f"Error executing code and fixes are disabled: {str(e)}",
+                        f"Error executing code and fixes are disabled: {e!s}",
                     )
                     context.scene.gemini_button_pressed = False
                     return {"CANCELLED"}
 
-                error_message = f"Error executing generated code: {str(e)}"
+                error_message = f"Error executing generated code: {e!s}"
                 self.report(
                     {"WARNING"},
                     f"Original code had an error. Attempting to fix (1/{max_fix_attempts})...",
@@ -555,7 +556,7 @@ class GEMINI_OT_Execute(bpy.types.Operator):
                         )
                         break
                     except Exception as e2:
-                        current_error = f"Error executing fixed code: {str(e2)}"
+                        current_error = f"Error executing fixed code: {e2!s}"
 
                         if attempt < max_fix_attempts:
                             self.report(

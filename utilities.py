@@ -77,7 +77,12 @@ class GEMINI_ChatMessage(bpy.types.PropertyGroup):
     )
 
 
-NO_MINIMAL_THINKING_MODELS = ("gemini-3.1-pro", "gemini-3.8-flash")
+NO_MINIMAL_THINKING_MODELS = ("gemini-4-argon", "gemini-3.8-flash")
+THINKING_LEVEL_MODEL_PREFIXES = ("gemini-3", "gemini-4")
+# Models that use background long decode, where the server chains output hops past 64K.
+LONG_DECODE_MODELS = ("gemini-4-argon",)
+LONG_DECODE_MAX_OUTPUT_TOKENS = 262144
+INTERACTION_POLL_INTERVAL = 2
 
 
 def get_thinking_level_items(self, context):
@@ -105,6 +110,11 @@ def init_props():
         description="Select the Gemini model to use",
         items=[
             (
+                "gemini-4-argon",
+                "Gemini 4 Argon",
+                "Use Gemini 4 Argon",
+            ),
+            (
                 "gemini-3.8-flash",
                 "Gemini 3.8 Flash",
                 "Use Gemini 3.8 Flash",
@@ -113,11 +123,6 @@ def init_props():
                 "gemini-3.5-flash-lite",
                 "Gemini 3.5 Flash Lite",
                 "Use Gemini 3.5 Flash Lite",
-            ),
-            (
-                "gemini-3.1-pro-preview",
-                "Gemini 3.1 Pro Preview",
-                "Use Gemini 3.1 Pro Preview",
             ),
         ],
         default="gemini-3.8-flash",
@@ -172,10 +177,12 @@ def _build_interaction_generation_config(context, addon_prefs):
         )
 
     model_name = getattr(context.scene, "gemini_model", "") or ""
-    if model_name.startswith("gemini-3"):
+    if model_name.startswith(THINKING_LEVEL_MODEL_PREFIXES):
         generation_config["thinking_level"] = getattr(
             context.scene, "gemini_thinking_level", "medium"
         )
+    if model_name in LONG_DECODE_MODELS:
+        generation_config["max_output_tokens"] = LONG_DECODE_MAX_OUTPUT_TOKENS
 
     return generation_config
 
@@ -199,6 +206,10 @@ def _build_interaction_request_data(
         data["previous_interaction_id"] = previous_interaction_id
     if enable_grounding:
         data["tools"] = [{"type": "google_search"}]
+    if model in LONG_DECODE_MODELS:
+        # Long decode only runs in background mode, which requires a stored interaction.
+        data["background"] = True
+        data["store"] = True
     return data
 
 
@@ -219,16 +230,23 @@ def _extract_interaction_output_text_from_steps(steps):
     if not isinstance(steps, list):
         raise ValueError("Interaction steps field is not a list.")
 
-    for step in reversed(steps):
-        if not isinstance(step, dict) or step.get("type") != "model_output":
-            continue
+    # Long decode appends one model_output step per hop, so join them all.
+    output_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and step.get("type") == "model_output"
+    ]
+    if not output_steps:
+        raise ValueError("Interaction response is missing a model output step.")
 
-        texts = _extract_text_blocks(step.get("content"))
-        if texts:
-            return "".join(texts)
-        raise ValueError("Model output step contained no text.")
-
-    raise ValueError("Interaction response is missing a model output step.")
+    texts = [
+        text
+        for step in output_steps
+        for text in _extract_text_blocks(step.get("content"))
+    ]
+    if texts:
+        return "".join(texts)
+    raise ValueError("Model output step contained no text.")
 
 
 def _extract_interaction_output_text_from_outputs(outputs):
@@ -283,15 +301,27 @@ def make_gemini_api_request(url, headers, data):
     wait_time = 1
     max_wait_time = 16
 
+    interaction_id = None
     for attempt in range(max_retries):
         try:
-            response = requests.post(url, headers=headers, json=data)
+            # After a background interaction is created, retries poll it instead of re-creating it.
+            if interaction_id:
+                response = requests.get(f"{url}/{interaction_id}", headers=headers)
+            else:
+                response = requests.post(url, headers=headers, json=data)
             response.raise_for_status()
 
             response_data = response.json()
             interaction_id = response_data.get("id")
             if not interaction_id:
                 raise ValueError("Interaction response is missing an id.")
+
+            while response_data.get("status") in ("in_progress", "queued"):
+                time.sleep(INTERACTION_POLL_INTERVAL)
+                response = requests.get(f"{url}/{interaction_id}", headers=headers)
+                response.raise_for_status()
+                response_data = response.json()
+
             return {
                 "text": _extract_interaction_output_text(response_data),
                 "interaction_id": interaction_id,
@@ -305,7 +335,7 @@ def make_gemini_api_request(url, headers, data):
                 and getattr(e.response, "text", None)
             ):
                 details = f"\nAPI Error details: {e.response.text}"
-            error_msg = f"API request failed (attempt {attempt + 1}/{max_retries}): {str(e)}{details}"
+            error_msg = f"API request failed (attempt {attempt + 1}/{max_retries}): {e!s}{details}"
             print(error_msg)
 
             status_code = getattr(getattr(e, "response", None), "status_code", None)
@@ -325,7 +355,7 @@ def make_gemini_api_request(url, headers, data):
                 print("Maximum retry attempts reached. Giving up.")
                 return None
         except (KeyError, IndexError, TypeError, ValueError) as e:
-            print(f"Error parsing API response: {str(e)}")
+            print(f"Error parsing API response: {e!s}")
             return None
 
 
@@ -1397,7 +1427,7 @@ Use the failed script, traceback, scene summary, and optional context below to p
 **[ERROR TRACEBACK]:**
 ```
 {error_message}
-```"""  # noqa
+```"""
 
     image_b64 = None
     if include_viewport_screenshot:
