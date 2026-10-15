@@ -1277,7 +1277,9 @@ def prepare_generation_request(
     full_prompt = f"(Blender {bpy.app.version_string})\n\n"
     if detailed_geometry:
         full_prompt += (
-            "**Detailed Object Geometry:**\n```json\n" + detailed_geometry + "\n```\n\n"
+            "**Detailed Geometry of Active Object:**\n```json\n"
+            + detailed_geometry
+            + "\n```\n\n"
         )
     if use_3d_cursor:
         full_prompt += _cursor_context_text(context)
@@ -1316,7 +1318,7 @@ def prepare_fix_request(
     detailed_geo_block = ""
     if detailed_geometry:
         detailed_geo_block = f"""
-**[DETAILED GEOMETRY OF SELECTED OBJECT]:**
+**[DETAILED GEOMETRY OF ACTIVE OBJECT]:**
 ```json
 {detailed_geometry}
 ```
