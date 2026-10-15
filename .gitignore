@@ -1,3 +1,5 @@
 .ruff_cache/
 __pycache__/
 .scratch/
+.vscode/
+ruff.toml

@@ -1,8 +1,0 @@
-# Vendored third-party packages.
-extend-exclude = ["lib"]
-
-[lint]
-# Blender add-on conventions: bpy raises undocumented exception types, so calls are wrapped
-# best-effort; operators declare bl_options; generated scripts run via exec; the add-on
-# folder name is not a valid module name.
-ignore = ["BLE001", "S110", "S112", "RUF012", "S102", "N999"]
