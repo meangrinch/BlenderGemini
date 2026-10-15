@@ -159,16 +159,8 @@ def _build_interaction_input_parts(text, image_b64=None):
     return parts
 
 
-def _build_interaction_generation_config(context, addon_prefs):
+def _build_interaction_generation_config(context):
     generation_config = {}
-    if getattr(addon_prefs, "enable_custom_sampling_parameters", False):
-        generation_config.update(
-            {
-                "temperature": addon_prefs.temperature,
-                "top_p": addon_prefs.top_p,
-            }
-        )
-
     model_name = getattr(context.scene, "gemini_model", "") or ""
     if model_name.startswith(THINKING_LEVEL_MODEL_PREFIXES):
         # Empty when the stored level isn't offered by the current model (e.g. "minimal").
@@ -1214,7 +1206,6 @@ def _prepare_request(
     send returns {"code", "interaction_id"} or None.
     """
     api_key = get_api_key(context, __package__) or os.getenv("GEMINI_API_KEY")
-    addon_prefs = context.preferences.addons[__package__].preferences
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
 
     image_b64 = (
@@ -1228,7 +1219,7 @@ def _prepare_request(
         system_prompt,
     )
     request_kwargs = {
-        "generation_config": _build_interaction_generation_config(context, addon_prefs),
+        "generation_config": _build_interaction_generation_config(context),
         "enable_grounding": context.scene.gemini_enable_grounding,
     }
 

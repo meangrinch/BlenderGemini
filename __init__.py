@@ -708,32 +708,6 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
         subtype="PASSWORD",
     )
 
-    enable_custom_sampling_parameters: bpy.props.BoolProperty(
-        name="Enable custom sampling parameters",
-        description="Send temperature and Top P with Gemini requests",
-        default=False,
-    )
-
-    temperature: bpy.props.FloatProperty(
-        name="Temperature",
-        description="Controls randomness: Lower values are more deterministic, higher values more creative",
-        default=1.0,
-        min=0.0,
-        max=1.0,
-        precision=2,
-        step=10,
-    )
-
-    top_p: bpy.props.FloatProperty(
-        name="Top P",
-        description="Controls diversity of output via nucleus sampling",
-        default=0.95,
-        min=0.0,
-        max=1.0,
-        precision=2,
-        step=5,
-    )
-
     max_fix_attempts: bpy.props.IntProperty(
         name="Max Fix Attempts",
         description="Maximum number of times to attempt fixing code errors (0 = don't attempt fixes)",
@@ -745,15 +719,6 @@ class GEMINI_AddonPreferences(bpy.types.AddonPreferences):
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "api_key")
-
-        layout.separator()
-
-        layout.label(text="Generation Parameters:")
-        layout.prop(self, "enable_custom_sampling_parameters")
-        sampling_box = layout.box()
-        sampling_box.enabled = self.enable_custom_sampling_parameters
-        sampling_box.prop(self, "temperature")
-        sampling_box.prop(self, "top_p")
 
         layout.separator()
 
