@@ -1,22 +1,34 @@
+import importlib
 import os
+import textwrap
+import threading
 
 import bmesh
 import bpy
 import bpy.props
 import mathutils
 
+# Reinstalling or re-enabling reloads only this package; without this, the
+# previously imported utilities module stays cached and its names go stale.
+if "utilities" in locals():
+    importlib.reload(utilities)  # noqa: F821
+
 from .utilities import (
     CODE_HELPERS,
     THINKING_LEVEL_MODEL_PREFIXES,
     GEMINI_ChatMessage,
     clear_props,
-    fix_blender_code,
-    generate_blender_code,
     get_api_key,
     get_detailed_object_data,
     init_props,
+    prepare_fix_request,
+    prepare_generation_request,
     split_area_to_text_editor,
 )
+
+# Set while a Gemini request is running; the Cancel button sets it. Kept out of
+# scene properties so undo can't restore a stale "running" state.
+_cancel_event = None
 
 bl_info = {
     "name": "Gemini Blender Assistant",
@@ -57,12 +69,45 @@ def _make_namespace(context):
 
 
 def _rollback_new_data(objects_before, materials_before):
-    """Remove objects and materials created since the snapshot, before a retry."""
-    _ensure_object_mode()
+    """Remove objects and materials created since the snapshot."""
     for obj in set(bpy.data.objects) - objects_before:
         bpy.data.objects.remove(obj, do_unlink=True)
     for mat in set(bpy.data.materials) - materials_before:
         bpy.data.materials.remove(mat)
+
+
+def _exec_with_rollback(context, code):
+    """
+    Run code. On error, undo everything it changed and return the exception.
+    Undo invalidates bpy references held by the caller.
+    """
+    _ensure_object_mode()
+    edit_prefs = context.preferences.edit
+    # With undo off, ed.undo either fails or steps back into older history,
+    # so fall back to deleting only the data the script created.
+    use_undo = edit_prefs.undo_steps > 0 and edit_prefs.use_global_undo
+    if use_undo:
+        bpy.ops.ed.undo_push(message="Before Gemini script")
+    else:
+        objects_before = set(bpy.data.objects)
+        materials_before = set(bpy.data.materials)
+    try:
+        exec(code, _make_namespace(context))
+    except Exception as e:
+        _ensure_object_mode()
+        if use_undo:
+            bpy.ops.ed.undo_push(message="Failed Gemini script")
+            bpy.ops.ed.undo()
+        else:
+            _rollback_new_data(objects_before, materials_before)
+        return e
+    return None
+
+
+def _redraw_panels(context):
+    for area in context.screen.areas:
+        if area.type == "VIEW_3D":
+            area.tag_redraw()
 
 
 def _add_chat_message(scene, message_type, content, interaction_id=""):
@@ -256,6 +301,43 @@ class GEMINI_OT_ShowCode(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class GEMINI_OT_RunCode(bpy.types.Operator):
+    bl_idname = "gemini.run_code"
+    bl_label = "Run Code"
+    bl_description = "Run this code again without contacting Gemini"
+    bl_options = {"REGISTER", "UNDO"}
+
+    message_index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        chat_history = context.scene.gemini_chat_history
+        if not 0 <= self.message_index < len(chat_history):
+            return {"CANCELLED"}
+
+        e = _exec_with_rollback(context, chat_history[self.message_index].content)
+        _ensure_object_mode()
+        if e is not None:
+            self.report({"ERROR"}, f"Error executing code: {e!s}")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class GEMINI_OT_ReusePrompt(bpy.types.Operator):
+    bl_idname = "gemini.reuse_prompt"
+    bl_label = "Reuse Prompt"
+    bl_description = "Copy this message back into the input field"
+    bl_options = {"REGISTER", "UNDO"}
+
+    message_index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        scene = context.scene
+        if not 0 <= self.message_index < len(scene.gemini_chat_history):
+            return {"CANCELLED"}
+        scene.gemini_chat_input = scene.gemini_chat_history[self.message_index].content
+        return {"FINISHED"}
+
+
 class GEMINI_OT_CopyGeometry(bpy.types.Operator):
     bl_idname = "gemini.copy_geometry"
     bl_label = "Copy Geometry"
@@ -331,23 +413,38 @@ class GEMINI_PT_Panel(bpy.types.Panel):
 
         column.label(text="Chat history:")
         box = column.box()
+        # Approximate characters per line; leaves room for the row's two icon buttons.
+        ui_scale = context.preferences.system.ui_scale
+        wrap_width = max(
+            20, int((context.region.width - 80 * ui_scale) / (7 * ui_scale))
+        )
         for index, message in enumerate(context.scene.gemini_chat_history):
             if message.type == "assistant":
                 row = box.row()
                 row.label(text="Assistant: ")
                 show_code_op = row.operator("gemini.show_code", text="Show Code")
                 show_code_op.message_index = index
+                run_code_op = row.operator("gemini.run_code", text="", icon="PLAY")
+                run_code_op.message_index = index
                 delete_message_op = row.operator(
                     "gemini.delete_message", text="", icon="TRASH", emboss=False
                 )
                 delete_message_op.message_index = index
             else:
-                row = box.row()
-                row.label(text=f"User: {message.content}")
+                lines = textwrap.wrap(f"User: {message.content}", wrap_width)
+                message_column = box.column(align=True)
+                row = message_column.row()
+                row.label(text=lines[0])
+                reuse_op = row.operator(
+                    "gemini.reuse_prompt", text="", icon="LOOP_BACK", emboss=False
+                )
+                reuse_op.message_index = index
                 delete_message_op = row.operator(
                     "gemini.delete_message", text="", icon="TRASH", emboss=False
                 )
                 delete_message_op.message_index = index
+                for line in lines[1:]:
+                    message_column.label(text=line)
 
         column.separator()
 
@@ -360,11 +457,6 @@ class GEMINI_PT_Panel(bpy.types.Panel):
 
         column.label(text="Enter your message:")
         column.prop(context.scene, "gemini_chat_input", text="")
-        button_label = (
-            "Please wait...(this might take some time)"
-            if context.scene.gemini_button_pressed
-            else "Execute"
-        )
         # Minimal toggles retained per user request
         row = column.row(align=True)
         row.prop(
@@ -389,7 +481,11 @@ class GEMINI_PT_Panel(bpy.types.Panel):
         row = column.row(align=True)
         row.prop(context.scene, "gemini_enable_grounding", text="Enable Grounding")
         row = column.row(align=True)
-        row.operator("gemini.send_message", text=button_label)
+        if _cancel_event is None:
+            row.operator("gemini.send_message", text="Execute")
+        else:
+            row.label(text="Waiting for Gemini...", icon="SORTTIME")
+            row.operator("gemini.cancel_request", text="Cancel", icon="CANCEL")
         row.operator("gemini.clear_chat", text="Clear Chat")
 
         column.separator()
@@ -407,11 +503,22 @@ class GEMINI_OT_ClearChat(bpy.types.Operator):
 
 
 class GEMINI_OT_Execute(bpy.types.Operator):
+    """Requests run on a worker thread while this modal operator keeps Blender
+    responsive; generated code runs back on the main thread when it arrives."""
+
     bl_idname = "gemini.send_message"
     bl_label = "Send Message"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        return _cancel_event is None
+
     def execute(self, context):
+        return self.invoke(context, None)
+
+    def invoke(self, context, event):
+        global _cancel_event
         scene = context.scene
         user_input = scene.gemini_chat_input
         if not user_input.strip():
@@ -425,111 +532,155 @@ class GEMINI_OT_Execute(bpy.types.Operator):
             )
             return {"CANCELLED"}
 
-        scene.gemini_button_pressed = True
-        try:
-            return self._generate_and_run(context, user_input)
-        finally:
-            scene.gemini_button_pressed = False
-
-    def _generate_and_run(self, context, user_input):
-        scene = context.scene
-        max_fix_attempts = context.preferences.addons[
-            __name__
-        ].preferences.max_fix_attempts
-        bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
-
         # Edit Mode changes live in the edit BMesh until synced back to obj.data.
         for obj in context.objects_in_mode:
             obj.update_from_editmode()
 
-        detailed_geometry = None
+        self.user_input = user_input
+        self.detailed_geometry = None
         if scene.gemini_include_geometry and context.active_object:
-            detailed_geometry = get_detailed_object_data(context.active_object)
-        use_3d_cursor = scene.gemini_use_3d_cursor
-        include_screenshot = scene.gemini_include_viewport_screenshot
+            self.detailed_geometry = get_detailed_object_data(context.active_object)
+        self.use_3d_cursor = scene.gemini_use_3d_cursor
+        self.include_screenshot = scene.gemini_include_viewport_screenshot
+        self.max_fix_attempts = context.preferences.addons[
+            __name__
+        ].preferences.max_fix_attempts
+        # Attempt 0 runs the generated code; later attempts run Gemini's fixes.
+        self.attempt = 0
+        self.repair_previous_interaction_id = ""
 
-        result = generate_blender_code(
-            user_input,
-            context,
-            generation_system_prompt,
-            detailed_geometry=detailed_geometry,
-            use_3d_cursor=use_3d_cursor,
-            include_viewport_screenshot=include_screenshot,
-        )
-        if not result or not result["code"]:
-            self.report(
-                {"ERROR"},
-                "Failed to generate code from Gemini API. Please check the console for details.",
+        _cancel_event = threading.Event()
+        self._start_request(
+            prepare_generation_request(
+                user_input,
+                context,
+                generation_system_prompt,
+                detailed_geometry=self.detailed_geometry,
+                use_3d_cursor=self.use_3d_cursor,
+                include_viewport_screenshot=self.include_screenshot,
             )
-            return {"CANCELLED"}
+        )
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.1, window=context.window)
+        wm.modal_handler_add(self)
+        _redraw_panels(context)
+        return {"RUNNING_MODAL"}
+
+    def _start_request(self, send):
+        # A plain list, not operator attributes, so the worker never touches bpy.
+        self._pending = pending = []
+        cancel = _cancel_event
+
+        def work():
+            try:
+                pending.append(send(cancel))
+            except Exception as e:
+                print(f"Gemini request failed: {e!s}")
+                pending.append(None)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def modal(self, context, event):
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+        if _cancel_event.is_set():
+            self.report({"INFO"}, "Gemini request cancelled.")
+            return self._finish(context, {"CANCELLED"})
+        if not self._pending:
+            return {"PASS_THROUGH"}
+        return self._handle_result(context, self._pending[0])
+
+    def _handle_result(self, context, result):
+        attempt = self.attempt
+        if not result or not result["code"]:
+            if attempt:
+                message = f"Could not fix the code on attempt {attempt}: {self.error}"
+            else:
+                message = "Failed to generate code from Gemini API. Please check the console for details."
+            self.report({"ERROR"}, message)
+            return self._finish(context, {"CANCELLED"})
 
         code = result["code"]
         interaction_id = result["interaction_id"]
-        repair_previous_interaction_id = interaction_id
-        objects_before = set(bpy.data.objects)
-        materials_before = set(bpy.data.materials)
-        error = ""
+        self.repair_previous_interaction_id = (
+            interaction_id or self.repair_previous_interaction_id
+        )
 
-        # Attempt 0 runs the generated code; later attempts run Gemini's fixes.
-        for attempt in range(max_fix_attempts + 1):
-            if attempt:
-                fix_result = fix_blender_code(
-                    code,
-                    error,
-                    context,
-                    repair_system_prompt,
-                    detailed_geometry=detailed_geometry,
-                    use_3d_cursor=use_3d_cursor,
-                    include_viewport_screenshot=include_screenshot,
-                    previous_interaction_id=repair_previous_interaction_id,
-                )
-                if not fix_result or not fix_result["code"]:
-                    self.report(
-                        {"ERROR"},
-                        f"Could not fix the code on attempt {attempt}: {error}",
-                    )
-                    return {"CANCELLED"}
-                code = fix_result["code"]
-                interaction_id = fix_result["interaction_id"]
-                repair_previous_interaction_id = (
-                    interaction_id or repair_previous_interaction_id
-                )
-
-            _ensure_object_mode()
-            try:
-                exec(code, _make_namespace(context))
-            except Exception as e:
-                kind = "fixed" if attempt else "generated"
-                error = f"Error executing {kind} code: {e!s}"
-                if attempt == max_fix_attempts:
-                    if max_fix_attempts == 0:
-                        message = f"Error executing code and fixes are disabled: {e!s}"
-                    else:
-                        message = f"Error executing code after {max_fix_attempts} fix attempts: {e}"
-                    self.report({"ERROR"}, message)
-                    return {"CANCELLED"}
-
-                if attempt:
-                    message = (
-                        f"Fix attempt {attempt} had an error. Attempting to fix again "
-                        f"({attempt + 1}/{max_fix_attempts})..."
-                    )
-                else:
-                    message = f"Original code had an error. Attempting to fix (1/{max_fix_attempts})..."
-                self.report({"WARNING"}, message)
-                _rollback_new_data(objects_before, materials_before)
-                continue
-
+        e = _exec_with_rollback(context, code)
+        if e is None:
             if attempt:
                 self.report(
                     {"INFO"},
                     f"Code fixed and executed successfully on attempt {attempt}!",
                 )
-            _commit_successful_turn(scene, user_input, code, interaction_id)
-            break
+            _commit_successful_turn(
+                context.scene, self.user_input, code, interaction_id
+            )
+            return self._finish(context, {"FINISHED"})
 
+        kind = "fixed" if attempt else "generated"
+        self.error = f"Error executing {kind} code: {e!s}"
+        max_fix_attempts = self.max_fix_attempts
+        if attempt == max_fix_attempts:
+            if max_fix_attempts == 0:
+                message = f"Error executing code and fixes are disabled: {e!s}"
+            else:
+                message = (
+                    f"Error executing code after {max_fix_attempts} fix attempts: {e}"
+                )
+            self.report({"ERROR"}, message)
+            return self._finish(context, {"CANCELLED"})
+
+        if attempt:
+            message = (
+                f"Fix attempt {attempt} had an error. Attempting to fix again "
+                f"({attempt + 1}/{max_fix_attempts})..."
+            )
+        else:
+            message = f"Original code had an error. Attempting to fix (1/{max_fix_attempts})..."
+        self.report({"WARNING"}, message)
+
+        self.attempt += 1
+        self._start_request(
+            prepare_fix_request(
+                code,
+                self.error,
+                context,
+                repair_system_prompt,
+                detailed_geometry=self.detailed_geometry,
+                use_3d_cursor=self.use_3d_cursor,
+                include_viewport_screenshot=self.include_screenshot,
+                previous_interaction_id=self.repair_previous_interaction_id,
+            )
+        )
+        return {"PASS_THROUGH"}
+
+    def _finish(self, context, result):
+        self.cancel(context)
         # Always return to Object Mode at the end to keep viewport/draw stable
         _ensure_object_mode()
+        _redraw_panels(context)
+        return result
+
+    def cancel(self, context):
+        # Blender also calls this when it drops the handler, e.g. on file load.
+        global _cancel_event
+        _cancel_event.set()  # stops a worker still polling after a cancel
+        _cancel_event = None
+        context.window_manager.event_timer_remove(self._timer)
+
+
+class GEMINI_OT_CancelRequest(bpy.types.Operator):
+    bl_idname = "gemini.cancel_request"
+    bl_label = "Cancel"
+    bl_description = "Stop waiting for the current Gemini request"
+
+    @classmethod
+    def poll(cls, context):
+        return _cancel_event is not None
+
+    def execute(self, context):
+        _cancel_event.set()
         return {"FINISHED"}
 
 
@@ -601,9 +752,12 @@ classes = [
     GEMINI_AddonPreferences,
     GEMINI_OT_DeleteMessage,
     GEMINI_OT_Execute,
+    GEMINI_OT_CancelRequest,
     GEMINI_PT_Panel,
     GEMINI_OT_ClearChat,
     GEMINI_OT_ShowCode,
+    GEMINI_OT_RunCode,
+    GEMINI_OT_ReusePrompt,
     GEMINI_OT_CopyGeometry,
     GEMINI_OT_CopyCursor,
 ]

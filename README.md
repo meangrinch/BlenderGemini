@@ -20,9 +20,12 @@ Blender can be controlled using program scripts written in Python. This plugin p
    - Tip: Place the cursor on or near the area of interest (Shift+Right-Click by default). For orientation-aware tasks (arrays, cuts, alignment), rotate the cursor to define axes.
 5. Enable "Attach Viewport Screenshot" to include a 3D Viewport image for additional visual context.
 6. Enable "Enable Grounding" to allow Gemini to use Google Search grounding for more verifiable, up-to-date responses.
-7. Click the `Execute` button to generate and execute the Blender Python code.
+7. Click the `Execute` button to generate and execute the Blender Python code. Blender stays usable while Gemini works, and `Cancel` stops waiting for the reply.
+8. In the chat history, use the play button next to a reply to run its code again without contacting Gemini, or the arrow button next to a message to copy it back into the input field.
 
-*Note: Gemini will automatically attempt to fix error-producing scripts (up to 1 time by default).*
+*Note: Gemini will automatically attempt to fix error-producing scripts (up to 1 time by default). A script that fails is undone before the fix runs, so its partial changes don't carry over. If undo is disabled in Preferences, only the objects and materials it created are removed.*
+
+*Tip: To regenerate a reply, press Ctrl+Z after it runs. That reverts both the scene and the chat, and restores your message to the input field, so you can click `Execute` again.*
 
 ## Requirements
 

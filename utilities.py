@@ -7,7 +7,6 @@ import math
 import os
 import re
 import tempfile
-import time
 
 import bmesh
 import bpy
@@ -128,7 +127,6 @@ def init_props():
         description="Enter your message",
         default="",
     )
-    bpy.types.Scene.gemini_button_pressed = bpy.props.BoolProperty(default=False)
     bpy.types.Scene.gemini_previous_interaction_id = bpy.props.StringProperty(
         name="Previous Interaction ID",
         default="",
@@ -149,7 +147,6 @@ def clear_props():
     del bpy.types.Scene.gemini_chat_history
     del bpy.types.Scene.gemini_model
     del bpy.types.Scene.gemini_chat_input
-    del bpy.types.Scene.gemini_button_pressed
     del bpy.types.Scene.gemini_previous_interaction_id
     del bpy.types.Scene.gemini_thinking_level
     del bpy.types.Scene.gemini_enable_grounding
@@ -292,10 +289,11 @@ def _extract_code_from_response_text(response_text):
     return response_text.strip()
 
 
-def make_gemini_api_request(url, headers, data):
+def make_gemini_api_request(url, headers, data, cancel):
     """
     Makes a request to the Gemini API with retry logic for handling errors.
     Returns (result, None) on success, or (None, http_status_or_None) on failure.
+    Stops between polls and retries once the `cancel` threading.Event is set.
     """
     max_retries = 5
     wait_time = 1
@@ -323,7 +321,8 @@ def make_gemini_api_request(url, headers, data):
                 raise ValueError("Interaction response is missing an id.")
 
             while response_data.get("status") in ("in_progress", "queued"):
-                time.sleep(INTERACTION_POLL_INTERVAL)
+                if cancel.wait(INTERACTION_POLL_INTERVAL):
+                    return None, None
                 response = _http_session.get(
                     f"{url}/{interaction_id}",
                     headers=headers,
@@ -360,7 +359,8 @@ def make_gemini_api_request(url, headers, data):
             if attempt < max_retries - 1:
                 current_wait = min(wait_time * (2**attempt), max_wait_time)
                 print(f"Retrying in {current_wait} seconds...")
-                time.sleep(current_wait)
+                if cancel.wait(current_wait):
+                    return None, None
             else:
                 print("Maximum retry attempts reached. Giving up.")
                 return None, status_code
@@ -1201,14 +1201,18 @@ def _cursor_context_text(context):
     return text
 
 
-def _request_code(
+def _prepare_request(
     context,
     prompt_text,
     system_prompt,
     include_viewport_screenshot,
     previous_interaction_id,
 ):
-    """Send one prompt to Gemini; returns {"code", "interaction_id"} or None."""
+    """
+    Gather everything that needs bpy on the main thread, and return send(cancel),
+    which does only network I/O so it can run on a worker thread.
+    send returns {"code", "interaction_id"} or None.
+    """
     api_key = get_api_key(context, __package__) or os.getenv("GEMINI_API_KEY")
     addon_prefs = context.preferences.addons[__package__].preferences
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
@@ -1228,39 +1232,41 @@ def _request_code(
         "enable_grounding": context.scene.gemini_enable_grounding,
     }
 
-    response, status = make_gemini_api_request(
-        GEMINI_INTERACTIONS_URL,
-        headers,
-        _build_interaction_request_data(
-            *request_args,
-            previous_interaction_id=previous_interaction_id,
-            **request_kwargs,
-        ),
+    data = _build_interaction_request_data(
+        *request_args,
+        previous_interaction_id=previous_interaction_id,
+        **request_kwargs,
     )
-    if (
-        not response
-        and previous_interaction_id
-        and status in STALE_INTERACTION_STATUSES
-    ):
-        print(
-            f"previous_interaction_id '{previous_interaction_id}' was rejected "
-            f"(HTTP {status}). Retrying as a fresh interaction..."
+    fresh_data = _build_interaction_request_data(*request_args, **request_kwargs)
+
+    def send(cancel):
+        response, status = make_gemini_api_request(
+            GEMINI_INTERACTIONS_URL, headers, data, cancel
         )
-        response, _status = make_gemini_api_request(
-            GEMINI_INTERACTIONS_URL,
-            headers,
-            _build_interaction_request_data(*request_args, **request_kwargs),
-        )
+        if (
+            not response
+            and previous_interaction_id
+            and status in STALE_INTERACTION_STATUSES
+        ):
+            print(
+                f"previous_interaction_id '{previous_interaction_id}' was rejected "
+                f"(HTTP {status}). Retrying as a fresh interaction..."
+            )
+            response, _status = make_gemini_api_request(
+                GEMINI_INTERACTIONS_URL, headers, fresh_data, cancel
+            )
 
-    if response:
-        return {
-            "code": _extract_code_from_response_text(response["text"]),
-            "interaction_id": response["interaction_id"],
-        }
-    return None
+        if response:
+            return {
+                "code": _extract_code_from_response_text(response["text"]),
+                "interaction_id": response["interaction_id"],
+            }
+        return None
+
+    return send
 
 
-def generate_blender_code(
+def prepare_generation_request(
     prompt,
     context,
     generation_system_prompt,
@@ -1287,7 +1293,7 @@ def generate_blender_code(
         + prompt
     )
 
-    return _request_code(
+    return _prepare_request(
         context,
         full_prompt,
         generation_system_prompt,
@@ -1296,7 +1302,7 @@ def generate_blender_code(
     )
 
 
-def fix_blender_code(
+def prepare_fix_request(
     original_code,
     error_message,
     context,
@@ -1306,7 +1312,7 @@ def fix_blender_code(
     include_viewport_screenshot=False,
     previous_interaction_id="",
 ):
-    """Generate fixed Blender code based on the error message."""
+    """Prepare a request for fixed Blender code based on the error message."""
     detailed_geo_block = ""
     if detailed_geometry:
         detailed_geo_block = f"""
@@ -1346,7 +1352,7 @@ Use the failed script, traceback, scene summary, and optional context below to p
 {error_message}
 ```"""
 
-    return _request_code(
+    return _prepare_request(
         context,
         fix_prompt,
         repair_system_prompt,
