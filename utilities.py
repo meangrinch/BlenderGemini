@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import heapq
 import json
 import math
@@ -228,7 +229,7 @@ def _extract_text_blocks(content):
 
 def _extract_interaction_output_text_from_steps(steps):
     if not isinstance(steps, list):
-        raise ValueError("Interaction steps field is not a list.")
+        raise TypeError("Interaction steps field is not a list.")
 
     # Long decode appends one model_output step per hop, so join them all.
     output_steps = [
@@ -251,7 +252,7 @@ def _extract_interaction_output_text_from_steps(steps):
 
 def _extract_interaction_output_text_from_outputs(outputs):
     if not isinstance(outputs, list):
-        raise ValueError("Interaction outputs field is not a list.")
+        raise TypeError("Interaction outputs field is not a list.")
 
     for output in reversed(outputs):
         if not isinstance(output, dict):
@@ -378,11 +379,10 @@ def capture_viewport_screenshot_base64(context, max_size=1024):
                 if area.type == "VIEW_3D":
                     for region in area.regions:
                         if region.type == "WINDOW":
-                            tmp_file = tempfile.NamedTemporaryFile(
+                            with tempfile.NamedTemporaryFile(
                                 delete=False, suffix=".png"
-                            )
-                            tmp_path = tmp_file.name
-                            tmp_file.close()
+                            ) as tmp_file:
+                                tmp_path = tmp_file.name
                             loaded_img = None
                             try:
                                 # Use a lightweight region-only screenshot to avoid heavy draw-engine paths
@@ -403,8 +403,8 @@ def capture_viewport_screenshot_base64(context, max_size=1024):
                                     largest = max(width, height)
                                     if max_size and largest > int(max_size):
                                         scale = float(max_size) / float(largest)
-                                        new_w = max(1, int(round(width * scale)))
-                                        new_h = max(1, int(round(height * scale)))
+                                        new_w = max(1, round(width * scale))
+                                        new_h = max(1, round(height * scale))
                                         loaded_img.scale(new_w, new_h)
                                         loaded_img.filepath_raw = tmp_path
                                         loaded_img.file_format = "PNG"
@@ -423,10 +423,8 @@ def capture_viewport_screenshot_base64(context, max_size=1024):
                                     img_bytes = f.read()
                                 return base64.b64encode(img_bytes).decode("ascii")
                             finally:
-                                try:
+                                with contextlib.suppress(OSError):
                                     os.remove(tmp_path)
-                                except Exception:
-                                    pass
         return None
     except Exception:
         return None
@@ -791,11 +789,10 @@ def get_detailed_object_data(obj):
 
     for edge in data.edges:
         edge_key = tuple(sorted(edge.vertices[:]))
-        if edge_key in edges_in_faces_set:
-            if edge_key not in edge_index_map:
-                edge_index_map[edge_key] = edge_counter
-                edges_list.append({"id": edge_counter, "vertices": list(edge_key)})
-                edge_counter += 1
+        if edge_key in edges_in_faces_set and edge_key not in edge_index_map:
+            edge_index_map[edge_key] = edge_counter
+            edges_list.append({"id": edge_counter, "vertices": list(edge_key)})
+            edge_counter += 1
 
     # Build faces as list of dicts (includes normals and UVs)
     faces_list = []
