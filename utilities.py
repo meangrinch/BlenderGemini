@@ -16,6 +16,10 @@ import requests
 GEMINI_INTERACTIONS_URL = (
     "https://generativelanguage.googleapis.com/v1beta/interactions"
 )
+API_REQUEST_TIMEOUT = 300
+LOCAL_PATCH_RADIUS = 0.24
+# Reused so status polls keep one TLS connection open instead of reconnecting each time.
+_http_session = requests.Session()
 
 
 def get_api_key(context, addon_name):
@@ -307,9 +311,15 @@ def make_gemini_api_request(url, headers, data):
         try:
             # After a background interaction is created, retries poll it instead of re-creating it.
             if interaction_id:
-                response = requests.get(f"{url}/{interaction_id}", headers=headers)
+                response = _http_session.get(
+                    f"{url}/{interaction_id}",
+                    headers=headers,
+                    timeout=API_REQUEST_TIMEOUT,
+                )
             else:
-                response = requests.post(url, headers=headers, json=data)
+                response = _http_session.post(
+                    url, headers=headers, json=data, timeout=API_REQUEST_TIMEOUT
+                )
             response.raise_for_status()
 
             response_data = response.json()
@@ -319,7 +329,11 @@ def make_gemini_api_request(url, headers, data):
 
             while response_data.get("status") in ("in_progress", "queued"):
                 time.sleep(INTERACTION_POLL_INTERVAL)
-                response = requests.get(f"{url}/{interaction_id}", headers=headers)
+                response = _http_session.get(
+                    f"{url}/{interaction_id}",
+                    headers=headers,
+                    timeout=API_REQUEST_TIMEOUT,
+                )
                 response.raise_for_status()
                 response_data = response.json()
 
@@ -735,20 +749,17 @@ def get_detailed_object_data(obj):
     vertex_count = len(data.vertices)
     face_count = len(data.polygons)
 
-    # Build set of edges that are part of faces (for efficient lookup and limit check)
-    edges_in_faces_set = set()
-    for face in data.polygons:
-        for edge_key in face.edge_keys:
-            # edge_key is a tuple of (v1, v2) - sort to ensure consistent ordering
-            edges_in_faces_set.add(tuple(sorted(edge_key)))
-    edge_count = len(edges_in_faces_set)
+    # Skip the per-face edge walk on dense meshes; the summary reports all edges instead.
+    too_dense = vertex_count > vertex_limit or face_count > face_limit
+    if too_dense:
+        edge_count = len(data.edges)
+    else:
+        # edge_keys are already ordered (min, max) tuples.
+        edges_in_faces_set = {key for face in data.polygons for key in face.edge_keys}
+        edge_count = len(edges_in_faces_set)
+        too_dense = edge_count > edge_limit
 
-    # Check if limits are exceeded
-    if (
-        vertex_count > vertex_limit
-        or face_count > face_limit
-        or edge_count > edge_limit
-    ):
+    if too_dense:
         simplified_dict = {
             "objectName": obj.name,
             "meshData": {
@@ -788,7 +799,7 @@ def get_detailed_object_data(obj):
     edge_counter = 0
 
     for edge in data.edges:
-        edge_key = tuple(sorted(edge.vertices[:]))
+        edge_key = edge.key
         if edge_key in edges_in_faces_set and edge_key not in edge_index_map:
             edge_index_map[edge_key] = edge_counter
             edges_list.append({"id": edge_counter, "vertices": list(edge_key)})
@@ -841,20 +852,20 @@ def _compute_falloff_weight(t, mode="SMOOTH"):
     """
     Compute a [0,1] falloff weight given normalized distance t in [0,1].
     mode="SMOOTH" uses a smoothstep curve; mode="LINEAR" uses linear.
+    `mode` must already be uppercase.
     """
     if t <= 0.0:
         return 1.0
     if t >= 1.0:
         return 0.0
-    mode_upper = str(mode).upper()
-    if mode_upper == "LINEAR":
+    if mode == "LINEAR":
         return 1.0 - t
-    if mode_upper == "GAUSSIAN":
+    if mode == "GAUSSIAN":
         # Zero-mean Gaussian with sigma=0.35 over t in [0,1]
         sigma = 0.35
         x = min(max(t, 0.0), 1.0)
         return math.exp(-(x * x) / (2.0 * sigma * sigma))
-    if mode_upper == "PLATEAU":
+    if mode == "PLATEAU":
         # Flat center up to 0.5, then smooth falloff to 0
         if t <= 0.5:
             return 1.0
@@ -872,35 +883,22 @@ def get_vertices_in_radius(obj, center_local, radius):
     """
     try:
         mesh = obj.data
-        bm = None
         is_edit_mode = False
         try:
             is_edit_mode = getattr(obj, "mode", "OBJECT") == "EDIT"
         except Exception:
             is_edit_mode = False
 
-        if is_edit_mode:
-            bm = bmesh.from_edit_mesh(mesh)
-        else:
-            bm = bmesh.new()
-            bm.from_mesh(mesh)
-
-        bm.verts.ensure_lookup_table()
+        # Edit Mode changes live only in the BMesh; otherwise read mesh data without a BMesh copy.
+        verts = bmesh.from_edit_mesh(mesh).verts if is_edit_mode else mesh.vertices
 
         center_vec = (
             center_local
             if isinstance(center_local, mathutils.Vector)
             else mathutils.Vector((center_local.x, center_local.y, center_local.z))
         )
-        in_radius = []
         r2 = radius * radius
-        for v in bm.verts:
-            if (v.co - center_vec).length_squared <= r2:
-                in_radius.append(v.index)
-
-        if not is_edit_mode and bm is not None:
-            bm.free()
-        return in_radius
+        return [v.index for v in verts if (v.co - center_vec).length_squared <= r2]
     except Exception:
         return []
 
@@ -926,7 +924,6 @@ def get_vertices_in_geodesic_radius(obj, center_world, radius):
             bm.from_mesh(mesh)
 
         bm.verts.ensure_lookup_table()
-        bm.edges.ensure_lookup_table()
 
         # Find start vertex nearest to center
         local_center = obj.matrix_world.inverted() @ center_world
@@ -997,21 +994,7 @@ def _build_bvh_from_object(obj):
         return None
 
     try:
-        depsgraph = bpy.context.evaluated_depsgraph_get()
-        eval_obj = obj.evaluated_get(depsgraph)
-        mesh = eval_obj.to_mesh()
-        try:
-            verts = [v.co[:] for v in mesh.vertices]
-            polys = [p.vertices[:] for p in mesh.polygons]
-            if not verts or not polys:
-                return None
-            bvh = BVHTree.FromPolygons(verts, polys)
-            return bvh
-        finally:
-            try:
-                eval_obj.to_mesh_clear()
-            except Exception:
-                pass
+        return BVHTree.FromObject(obj, bpy.context.evaluated_depsgraph_get())
     except Exception:
         return None
 
@@ -1101,7 +1084,6 @@ def get_local_geometry_patch_text(
         index_set = set(indices)
 
         data = obj.data
-        verts_local = [v.co for v in data.vertices]
         # Map old idx -> new sequential idx within patch
         remap = {idx: i for i, idx in enumerate(indices)}
 
@@ -1121,7 +1103,7 @@ def get_local_geometry_patch_text(
         out.append(f"- Faces: {len(faces)}")
         out.append("Vertices (local space x, y, z):")
         for i, idx in enumerate(indices[:vertex_limit]):
-            co = verts_local[idx]
+            co = data.vertices[idx].co
             out.append(f"  - ({co.x:.4f}, {co.y:.4f}, {co.z:.4f})")
         out.append("Faces (vertex indices within patch):")
         for f in faces:
@@ -1163,9 +1145,8 @@ def apply_radial_shrink_fatten(
             bm = bmesh.new()
             bm.from_mesh(mesh)
 
-        bm.verts.ensure_lookup_table()
-        bm.faces.ensure_lookup_table()
         bm.normal_update()
+        falloff_mode = str(falloff).upper()
 
         def _apply(center_vec):
             r = float(radius)
@@ -1178,7 +1159,7 @@ def apply_radial_shrink_fatten(
                 if d2 > r2:
                     continue
                 d = math.sqrt(d2)
-                w = _compute_falloff_weight(d / r, falloff)
+                w = _compute_falloff_weight(d / r, falloff_mode)
                 n = v.normal.normalized()
                 v.co = v.co - n * (strength * w)
 
@@ -1266,8 +1247,9 @@ def generate_blender_code(
             target_obj, _reason, _dist = _choose_cursor_target_object(context)
             if target_obj is not None:
                 cursor_ws = context.scene.cursor.location.copy()
-                r = getattr(context.scene, "gemini_edit_radius", 0.12) * 2.0
-                patch_text = get_local_geometry_patch_text(target_obj, cursor_ws, r)
+                patch_text = get_local_geometry_patch_text(
+                    target_obj, cursor_ws, LOCAL_PATCH_RADIUS
+                )
                 full_prompt += "**[LOCAL GEOMETRY PATCH]:**\n" + patch_text + "\n\n"
         except Exception:
             pass
@@ -1391,8 +1373,9 @@ Attached below. Use it to infer view orientation and selection state, and to und
             target_obj, _reason, _dist = _choose_cursor_target_object(context)
             if target_obj is not None:
                 cursor_ws = context.scene.cursor.location.copy()
-                r = getattr(context.scene, "gemini_edit_radius", 0.12) * 2.0
-                patch_text = get_local_geometry_patch_text(target_obj, cursor_ws, r)
+                patch_text = get_local_geometry_patch_text(
+                    target_obj, cursor_ws, LOCAL_PATCH_RADIUS
+                )
                 patch_block = f"""
 **[LOCAL GEOMETRY PATCH]:**
 ```

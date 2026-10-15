@@ -236,20 +236,20 @@ class GEMINI_OT_ShowCode(bpy.types.Operator):
     bl_label = "Show Code"
     bl_options = {"REGISTER", "UNDO"}
 
-    code: bpy.props.StringProperty(
-        name="Code",
-        description="The generated code",
-        default="",
-    )
+    message_index: bpy.props.IntProperty()
 
     def execute(self, context):
+        chat_history = context.scene.gemini_chat_history
+        if not 0 <= self.message_index < len(chat_history):
+            return {"CANCELLED"}
+
         text_name = "Gemini_Generated_Code.py"
         text = bpy.data.texts.get(text_name)
         if text is None:
             text = bpy.data.texts.new(text_name)
 
         text.clear()
-        text.write(self.code)
+        text.write(chat_history[self.message_index].content)
 
         text_editor_area = None
         for area in context.screen.areas:
@@ -269,7 +269,7 @@ class GEMINI_OT_CopyGeometry(bpy.types.Operator):
     bl_idname = "gemini.copy_geometry"
     bl_label = "Copy Geometry"
     bl_description = "Copy detailed geometry data of selected object to clipboard"
-    bl_options = {"REGISTER", "UNDO"}
+    bl_options = {"REGISTER"}
 
     @classmethod
     def poll(cls, context):
@@ -308,7 +308,7 @@ class GEMINI_OT_CopyCursor(bpy.types.Operator):
     bl_idname = "gemini.copy_cursor"
     bl_label = "Copy Cursor"
     bl_description = "Copy 3D cursor location and orientation data to clipboard"
-    bl_options = {"REGISTER", "UNDO"}
+    bl_options = {"REGISTER"}
 
     def execute(self, context):
         try:
@@ -353,7 +353,7 @@ class GEMINI_PT_Panel(bpy.types.Panel):
                 row = box.row()
                 row.label(text="Assistant: ")
                 show_code_op = row.operator("gemini.show_code", text="Show Code")
-                show_code_op.code = message.content
+                show_code_op.message_index = index
                 delete_message_op = row.operator(
                     "gemini.delete_message", text="", icon="TRASH", emboss=False
                 )
