@@ -34,7 +34,7 @@ bl_info = {
     "blender": (4, 5, 0),
     "category": "Object",
     "author": "grinnch (@meangrinch)",
-    "version": (1, 7, 4),
+    "version": (1, 8, 0),
     "location": "3D View > UI > Gemini Blender Assistant",
     "description": "Generate Blender Python code using Google's Gemini.",
     "wiki_url": "",
