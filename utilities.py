@@ -72,28 +72,37 @@ class GEMINI_ChatMessage(bpy.types.PropertyGroup):
     )
 
 
-NO_MINIMAL_THINKING_MODELS = ("gemini-4-argon", "gemini-3.8-flash")
+XHIGH_THINKING_MODELS = ("gemini-4-hydrogen",)
 THINKING_LEVEL_MODEL_PREFIXES = ("gemini-3", "gemini-4")
 # Models that use background long decode, where the server chains output hops past 64K.
-LONG_DECODE_MODELS = ("gemini-4-argon",)
+LONG_DECODE_MODELS = ("gemini-4-carbon", "gemini-4-hydrogen")
 LONG_DECODE_MAX_OUTPUT_TOKENS = 262144
 INTERACTION_POLL_INTERVAL = 2
 
 
 def get_thinking_level_items(self, context):
+    # Explicit enum numbers keep "high" (0) as the default even when "xhigh" is prepended,
+    # and skip 3 so old scenes saved with "minimal" (index 3) don't map to "xhigh".
     items = [
-        ("high", "High", "Deeper thinking for difficult tasks"),
-        ("medium", "Medium", "Balanced thinking for most tasks"),
-        ("low", "Low", "Lighter thinking for faster responses"),
+        ("high", "High", "Deeper thinking for difficult tasks", "", 0),
+        ("medium", "Medium", "Balanced thinking for most tasks", "", 1),
+        ("low", "Low", "Lighter thinking for faster responses", "", 2),
     ]
     if context is None or getattr(context, "scene", None) is None:
-        items.append(("minimal", "Minimal", "No thinking for instant responses"))
         return items
 
     model_name = getattr(context.scene, "gemini_model", "")
-    if not any(m in model_name for m in NO_MINIMAL_THINKING_MODELS):
-        items.append(("minimal", "Minimal", "No thinking for instant responses"))
+    if model_name in XHIGH_THINKING_MODELS:
+        items.insert(
+            0,
+            ("xhigh", "Extra High", "Maximum thinking for the hardest tasks", "", 4),
+        )
     return items
+
+
+def _on_gemini_model_update(self, context):
+    if not self.gemini_thinking_level:
+        self.gemini_thinking_level = "high"
 
 
 def init_props():
@@ -105,22 +114,23 @@ def init_props():
         description="Select the Gemini model to use",
         items=[
             (
-                "gemini-4-argon",
-                "Gemini 4 Argon",
-                "Use Gemini 4 Argon",
+                "gemini-4-carbon",
+                "Gemini 4 Carbon",
+                "Use Gemini 4 Carbon",
+            ),
+            (
+                "gemini-4-hydrogen",
+                "Gemini 4 Hydrogen",
+                "Use Gemini 4 Hydrogen",
             ),
             (
                 "gemini-3.8-flash",
                 "Gemini 3.8 Flash",
                 "Use Gemini 3.8 Flash",
             ),
-            (
-                "gemini-3.5-flash-lite",
-                "Gemini 3.5 Flash Lite",
-                "Use Gemini 3.5 Flash Lite",
-            ),
         ],
-        default="gemini-3.8-flash",
+        default="gemini-4-hydrogen",
+        update=_on_gemini_model_update,
     )
     bpy.types.Scene.gemini_chat_input = bpy.props.StringProperty(
         name="Message",
@@ -133,7 +143,7 @@ def init_props():
     )
     bpy.types.Scene.gemini_thinking_level = bpy.props.EnumProperty(
         name="Thinking Level",
-        description="Select the thinking level for Gemini 3.x models",
+        description="Select the thinking level for Gemini",
         items=get_thinking_level_items,
     )
     bpy.types.Scene.gemini_enable_grounding = bpy.props.BoolProperty(
@@ -163,7 +173,7 @@ def _build_interaction_generation_config(context):
     generation_config = {}
     model_name = getattr(context.scene, "gemini_model", "") or ""
     if model_name.startswith(THINKING_LEVEL_MODEL_PREFIXES):
-        # Empty when the stored level isn't offered by the current model (e.g. "minimal").
+        # Empty when the stored level isn't offered by the current model (e.g. "xhigh").
         generation_config["thinking_level"] = (
             context.scene.gemini_thinking_level or "high"
         )
