@@ -72,10 +72,10 @@ class GEMINI_ChatMessage(bpy.types.PropertyGroup):
     )
 
 
-XHIGH_THINKING_MODELS = ("gemini-4-hydrogen",)
-THINKING_LEVEL_MODEL_PREFIXES = ("gemini-3", "gemini-4")
+XHIGH_THINKING_MODELS = ("gemini-4-neon", "gemini-4-hydrogen")
+THINKING_LEVEL_MODEL_PREFIXES = ("gemini-4",)
 # Models that use background long decode, where the server chains output hops past 64K.
-LONG_DECODE_MODELS = ("gemini-4-carbon", "gemini-4-hydrogen")
+LONG_DECODE_MODELS = ("gemini-4-carbon", "gemini-4-neon", "gemini-4-hydrogen")
 LONG_DECODE_MAX_OUTPUT_TOKENS = 262144
 INTERACTION_POLL_INTERVAL = 2
 
@@ -119,14 +119,14 @@ def init_props():
                 "Use Gemini 4 Carbon",
             ),
             (
+                "gemini-4-neon",
+                "Gemini 4 Neon",
+                "Use Gemini 4 Neon",
+            ),
+            (
                 "gemini-4-hydrogen",
                 "Gemini 4 Hydrogen",
                 "Use Gemini 4 Hydrogen",
-            ),
-            (
-                "gemini-3.8-flash",
-                "Gemini 3.8 Flash",
-                "Use Gemini 3.8 Flash",
             ),
         ],
         default="gemini-4-hydrogen",
